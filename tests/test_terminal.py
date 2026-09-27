@@ -11,8 +11,8 @@ if os.name == 'posix':
     import struct
     import termios
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import app
-import terminal_sessions as terminal
+import termiusplus.server as app
+import termiusplus.terminal_sessions as terminal
 
 
 class TerminalTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class TerminalTests(unittest.TestCase):
         session=terminal.TerminalSession([sys.executable,'-u','-c',"print('marker',flush=True)"],'buffer')
         try:
             self.wait_for(session,b'marker');session.reader.join(3)
-            with patch('terminal_sessions.OUTPUT_LIMIT',32768):
+            with patch('termiusplus.terminal_sessions.OUTPUT_LIMIT',32768):
                 for _ in range(8): session._append(b'a'*16384)
             result=session.poll(0,wait=0)
             self.assertTrue(result['truncated'])
@@ -82,7 +82,7 @@ class TerminalTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'posix', 'login shell test uses /bin/sh')
     def test_terminal_api_real_shell_and_binary_input(self):
         identifier=None
-        with patch('terminal_sessions.ssh_command',return_value=['/bin/sh','-i']):
+        with patch('termiusplus.terminal_sessions.ssh_command',return_value=['/bin/sh','-i']):
             result=terminal.terminal_api('open',{'route':{'host':'fixture'},'cols':80,'rows':24},app.validate_route,app.ssh_args)
             identifier=result['id'];session=terminal.SESSIONS[identifier]
             try:
@@ -121,8 +121,8 @@ class TerminalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             canonical=os.path.realpath(directory)
             command=[sys.executable,'-u','-c',"import os;print('CWD',os.getcwd(),flush=True)"]
-            with patch('terminal_sessions.local_command',return_value=(command,canonical)),\
-                 patch('terminal_sessions.ssh_command',side_effect=AssertionError('本地终端不应使用 SSH')):
+            with patch('termiusplus.terminal_sessions.local_command',return_value=(command,canonical)),\
+                 patch('termiusplus.terminal_sessions.ssh_command',side_effect=AssertionError('本地终端不应使用 SSH')):
                 result=terminal.terminal_api('open',{'local':True,'path':directory,'cols':90,'rows':30},app.validate_route,app.ssh_args)
                 identifier=result['id'];session=terminal.SESSIONS[identifier]
                 try:

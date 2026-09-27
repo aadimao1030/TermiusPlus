@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-import platform_compat
+from . import platform_compat
 
 BOOTSTRAP = r'''
 import os,sys,json,base64,subprocess,shlex,shutil

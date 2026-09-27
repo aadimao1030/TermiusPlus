@@ -1,5 +1,6 @@
 #!/bin/bash
-# 编译 TermiusPlus.app 并安装到 /Applications（可用第一个参数指定其他目录）。项目移动后需重新运行。
+# 编译 TermiusPlus.app 并安装到 /Applications（可用第一个参数指定其他目录）。
+# App 记录的是仓库根目录：根目录必须有 app.py，服务入口是 launcher/serve.py。项目移动后需重新运行。
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 project="$(dirname "$here")"

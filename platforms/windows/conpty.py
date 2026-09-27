@@ -11,7 +11,7 @@ import subprocess
 from ctypes import wintypes
 
 if os.name != 'nt':
-    raise ImportError('win_conpty 只能在 Windows 上导入')
+    raise ImportError('platforms.windows.conpty 只能在 Windows 上导入')
 
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 

@@ -4,7 +4,7 @@ import hashlib
 import json
 import shlex
 import subprocess
-import app
+from . import server as app
 
 CREATE_KEY = r'''
 import os,sys,subprocess

@@ -5,8 +5,8 @@ Starts app.py on 127.0.0.1 with a random token and opens Edge or Chrome in
 launcher started. A server this launcher already left running is reused and is
 not stopped when a second window hands off to the same profile.
 
-Run it with pythonw (TermiusPlus.vbs) so there is no console. Plain
-`python launcher/windows_app.py` works too. This is the source-tree app; it
+Run it with pythonw (scripts/TermiusPlus.vbs) so there is no console. Plain
+`python platforms/windows/launcher.py` works too. This is the source-tree app; it
 does not replace `python app.py`.
 """
 import ctypes
@@ -20,11 +20,11 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import platform_compat  # noqa: E402
+from termiusplus import platform_compat  # noqa: E402
 
 
 def data_root(environ=None):
@@ -270,7 +270,7 @@ def run(project=None):
 
 def main():
     if os.name != 'nt':
-        print('launcher/windows_app.py 只用于 Windows。请运行 python3 app.py，或在 macOS 使用 TermiusPlus.app。', file=sys.stderr)
+        print('platforms/windows/launcher.py 只用于 Windows。请运行 python3 app.py，或在 macOS 使用 TermiusPlus.app。', file=sys.stderr)
         return 2
     server = None
     owned = False

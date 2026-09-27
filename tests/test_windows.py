@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import platform_compat
-import launcher.windows_app as windows_app
+import termiusplus.platform_compat as platform_compat
+import platforms.windows.launcher as windows_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +56,7 @@ class WindowsPathTests(unittest.TestCase):
 
     def test_display_path_and_drive_request(self):
         self.assertEqual(platform_compat.display_path('/tmp/a'), '/tmp/a')
-        with patch('platform_compat.os.name', 'nt'):
+        with patch('termiusplus.platform_compat.os.name', 'nt'):
             self.assertEqual(platform_compat.display_path(r'C:\Users\me'), 'C:/Users/me')
             self.assertEqual(platform_compat.display_path('C:'), 'C:/')
             self.assertTrue(platform_compat.is_drive_list_request('此电脑'))
@@ -89,10 +89,10 @@ class WindowsPathTests(unittest.TestCase):
         self.assertFalse(platform_compat.within_directory(r'C:\work', r'D:\work\a'))
 
     def test_conpty_module_compiles_without_executing(self):
-        py_compile.compile(str(ROOT / 'win_conpty.py'), doraise=True)
+        py_compile.compile(str(ROOT / 'platforms' / 'windows' / 'conpty.py'), doraise=True)
 
     def test_frontend_parent_and_relative_paths(self):
-        html = (ROOT / 'index.html').read_text(encoding='utf-8')
+        html = (ROOT / 'web' / 'index.html').read_text(encoding='utf-8')
         start = html.index('function relative(')
         end = html.index('function updateSelection(')
         script = html[start:end] + r"""

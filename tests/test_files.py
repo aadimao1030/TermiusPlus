@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app
-import platform_compat
+import termiusplus.server as app
+import termiusplus.platform_compat as platform_compat
 
 
 class FilesTests(unittest.TestCase):
@@ -146,7 +146,7 @@ class FilesTests(unittest.TestCase):
             (local/'folder').mkdir(); (local/'folder'/'中文.txt').write_text('upload')
             adapter = root/'transport.py'
             adapter.write_text("import sys,subprocess,shlex,os\nos.environ['PATH']=" + repr(str(Path(app.rsync_binary()).parent)) + "+os.pathsep+os.environ['PATH']\nargs=sys.argv[2:]\nif len(args)==1: args=shlex.split(args[0])\nsys.exit(subprocess.call(args))\n")
-            with patch('app.ssh_args', return_value=[sys.executable, str(adapter)]):
+            with patch('termiusplus.server.ssh_args', return_value=[sys.executable, str(adapter)]):
                 upload = app.Job({'direction': 'upload', 'routes': [{'host': 'fixture'}], 'local': str(local), 'remote': str(remote), 'items': ['folder'], 'pack': True})
                 upload.run()
                 self.assertEqual(upload.state, 'completed', list(upload.log))
@@ -184,7 +184,7 @@ class FilesTests(unittest.TestCase):
             adapter = root/'transport.py'
             adapter.write_text("import sys,subprocess,shlex,os\nos.environ['PATH']=" + repr(str(Path(app.rsync_binary()).parent)) + "+os.pathsep+os.environ['PATH']\nargs=sys.argv[2:]\nif len(args)==1: args=shlex.split(args[0])\nsys.exit(subprocess.call(args))\n")
             endpoints = dict(source=dict(kind='remote', path=str(source), routes=[{'host':'fixture'}]), destination=dict(kind='remote', path=str(target), routes=[{'host':'fixture'}]))
-            with patch('app.ssh_args', return_value=[sys.executable, str(adapter)]):
+            with patch('termiusplus.server.ssh_args', return_value=[sys.executable, str(adapter)]):
                 for packed in (False, True):
                     job = app.RelayJob(dict(direction='relay', items=['folder'], pack=packed, **endpoints))
                     job.run()

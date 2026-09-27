@@ -10,7 +10,7 @@ import signal
 import subprocess
 
 # Virtual local root shown in the file pane on Windows. The same label is used
-# by index.html (directoryParent / relative); keep the two in sync.
+# by web/index.html (directoryParent / relative); keep the two in sync.
 DRIVES_PATH = '此电脑'
 
 CREATE_NEW_PROCESS_GROUP = 0x00000200

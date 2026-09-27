@@ -2,7 +2,7 @@
 import argparse
 import http.client
 import os
-import app
+from . import server as app
 
 class Handler(app.Handler):
     def do_POST(self):

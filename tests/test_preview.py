@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app
+import termiusplus.server as app
 
 
 class PreviewTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class PreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/"a' $(id).txt"; p.write_text('remote sample')
             output = subprocess.run([sys.executable, '-c', app.REMOTE_PREVIEW_SCRIPT, str(p)], capture_output=True, check=True)
-            with patch('app.subprocess.run', return_value=output) as run:
+            with patch('termiusplus.server.subprocess.run', return_value=output) as run:
                 result = app.remote_preview({'host':'fixture'}, str(p))
                 self.assertEqual(result['content'], 'remote sample')
                 import shlex

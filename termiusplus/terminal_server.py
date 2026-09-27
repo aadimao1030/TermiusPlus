@@ -1,7 +1,7 @@
 """Optional standalone terminal service, useful while transfers keep running."""
 import argparse
 import os
-import app
+from . import server as app
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)

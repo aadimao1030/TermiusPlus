@@ -3,14 +3,14 @@ Option Explicit
 Dim fso, shell, root, command
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
-root = fso.GetParentFolderName(WScript.ScriptFullName)
+root = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 shell.CurrentDirectory = root
-command = "pyw -3 """ & root & "\launcher\windows_app.py"""
+command = "pyw -3 """ & root & "\platforms\windows\launcher.py"""
 On Error Resume Next
 shell.Run command, 0, False
 If Err.Number <> 0 Then
   Err.Clear
-  command = "pythonw """ & root & "\launcher\windows_app.py"""
+  command = "pythonw """ & root & "\platforms\windows\launcher.py"""
   shell.Run command, 0, False
 End If
 If Err.Number <> 0 Then

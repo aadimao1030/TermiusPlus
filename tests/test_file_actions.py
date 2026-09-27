@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import app
+import termiusplus.server as app
 
 class FileActionTests(unittest.TestCase):
     def test_rename_and_collision_preserve_both_files(self):

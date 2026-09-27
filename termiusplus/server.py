@@ -19,14 +19,16 @@ import tempfile
 import tarfile
 import posixpath
 import atexit
-import platform_compat
-import terminal_sessions
-import transfer_history
-import remote_tasks
+from . import platform_compat
+from . import terminal_sessions
+from . import transfer_history
+from . import remote_tasks
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
+BASE = ROOT
+WEB = ROOT / 'web'
 TOKEN = os.environ.get('TERMIUSPLUS_TOKEN') or secrets.token_urlsafe(32)
 LOCK = threading.RLock()
 JOBS = {}
@@ -1014,7 +1016,7 @@ def validate_endpoint(endpoint):
     return dict(kind='remote', path=endpoint['path'], routes=[validate_route(route) for route in endpoint['routes']])
 
 
-RemoteJob = remote_tasks.make_job_class(Job, remote_info, ssh_args, checkpoint, BASE, REMOTE_SCRIPT, REMOTE_ARCHIVE_SCRIPT, archive_name)
+RemoteJob = remote_tasks.make_job_class(Job, remote_info, ssh_args, checkpoint, Path(__file__).resolve().parent, REMOTE_SCRIPT, REMOTE_ARCHIVE_SCRIPT, archive_name)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -1043,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
         if not asset:
             self.send_json({'error': 'Not found'}, 404)
             return
-        body = (BASE / asset[0]).read_bytes()
+        body = (WEB / asset[0]).read_bytes()
         self.send_response(200)
         self.send_header('Content-Type', asset[1])
         self.send_header('Content-Length', str(len(body)))

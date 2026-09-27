@@ -1,6 +1,6 @@
 """Bounded interactive local and SSH shell sessions.
 
-POSIX sessions use a local PTY. Windows sessions use ConPTY (see win_conpty.py)
+POSIX sessions use a local PTY. Windows sessions use ConPTY (see platforms/windows/conpty.py)
 so PowerShell or cmd can run without a third-party package. The worker that
 sets a controlling terminal is POSIX-only; Windows OpenSSH already treats a
 pseudoconsole as a console.
@@ -43,7 +43,7 @@ def local_command(path):
     when it is installed, otherwise cmd. cwd is the directory, so the shell
     starts there without a POSIX -l flag.
     """
-    import platform_compat
+    from . import platform_compat
     if not isinstance(path, str) or '\0' in path or len(path) > 8192:
         raise ValueError('终端目录不正确')
     if platform_compat.is_drive_list_request(path):
@@ -94,7 +94,7 @@ class TerminalSession:
         self._conpty = None
         env = dict(os.environ, TERM='xterm-256color')
         if os.name == 'nt':
-            import win_conpty
+            from platforms.windows import conpty as win_conpty
             try:
                 self._conpty = win_conpty.ConPTY(list(command), cols, rows, cwd=cwd, env=env)
             except OSError as exc:
