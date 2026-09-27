@@ -19,6 +19,7 @@ import tempfile
 import tarfile
 import posixpath
 import atexit
+import platform_compat
 import terminal_sessions
 import transfer_history
 import remote_tasks
@@ -94,15 +95,23 @@ def validate_route(route):
     return dict(name=str(route.get('name') or host)[:100], host=host, port=port, jump=jump, key=key)
 
 
+def run_hidden(args, **kwargs):
+    kwargs.update(platform_compat.hidden_run_kwargs())
+    return subprocess.run(args, **kwargs)
+
+
 def ssh_args(route):
     r = validate_route(route)
-    args = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    args = [platform_compat.ssh_program(), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=10',
             '-o', 'ServerAliveCountMax=2', '-o', 'Compression=no', '-p', str(r['port'])]
     if r['jump']:
         args += ['-J', r['jump']]
     if r['key']:
-        args += ['-i', os.path.expanduser(r['key'])]
+        key = os.path.expanduser(r['key'])
+        if os.name == 'nt':
+            key = key.replace('\\', '/')
+        args += ['-i', key]
     return args
 
 
@@ -110,7 +119,7 @@ def remote_info(route, path, identity_only=False):
     command = 'python3 -c ' + shlex.quote(REMOTE_SCRIPT) + ' ' + shlex.quote(path)
     if identity_only:
         command += ' identity'
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    result = run_hidden(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程目录读取失败')
     data = json.loads(result.stdout)
@@ -124,7 +133,10 @@ def file_preview(path):
     import os, stat, base64, codecs
     text_limit, image_limit = 256 * 1024, 8 * 1024 * 1024
     path = os.path.realpath(os.path.expanduser(path))
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    flags = os.O_RDONLY
+    if hasattr(os, 'O_NONBLOCK'):
+        flags |= os.O_NONBLOCK
+    fd = os.open(path, flags)
     with os.fdopen(fd, 'rb') as stream:
         st = os.fstat(stream.fileno())
         if not stat.S_ISREG(st.st_mode):
@@ -168,7 +180,7 @@ REMOTE_PREVIEW_SCRIPT = inspect.getsource(file_preview) + "\nimport json,sys\npr
 
 def remote_preview(route, path):
     command = 'python3 -c ' + shlex.quote(REMOTE_PREVIEW_SCRIPT) + ' ' + shlex.quote(path)
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    result = run_hidden(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程文件预览失败')
     return json.loads(result.stdout)
@@ -180,19 +192,36 @@ def file_operation(root, path, operation, name=None):
     import os, uuid, ctypes, sys
     root = os.path.abspath(os.path.expanduser(root))
     path = os.path.abspath(os.path.expanduser(path))
-    if path == root or os.path.commonpath([root, path]) != root:
+    # Inlined so the source sent to a remote host does not depend on platform_compat.
+    def inside(parent, child):
+        if os.path.normcase(child) == os.path.normcase(parent):
+            return False
+        try:
+            return os.path.normcase(os.path.commonpath([parent, child])) == os.path.normcase(parent)
+        except ValueError:
+            return False
+    if not inside(root, path):
         raise ValueError('只能操作当前目录内的项目')
     if not os.path.lexists(path):
         raise ValueError('项目已不存在，请刷新目录')
     parent, basename = os.path.split(path)
     if operation == 'rename':
-        if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\0' in name:
+        if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\0' in name or (os.name == 'nt' and any(c in name for c in '\\:*?"<>|')):
             raise ValueError('名称不能为空，也不能包含 / 或空字符')
         target = os.path.join(parent, name)
         if target == path:
             return dict(path=target)
         if os.path.lexists(target):
             raise ValueError('同名项目已存在，不会覆盖')
+        if os.name == 'nt':
+            # os.rename does not replace an existing file on Windows. It is not the
+            # atomic renameat2/renamex_np used on Linux and macOS, but it still refuses
+            # to overwrite. The pre-check above is what the tests rely on.
+            try:
+                os.rename(path, target)
+            except FileExistsError:
+                raise ValueError('同名项目已存在，不会覆盖')
+            return dict(path=target)
         # Atomic no-replace rename, including directories and symlinks.
         libc = ctypes.CDLL(None, use_errno=True)
         if sys.platform == 'darwin':
@@ -235,40 +264,41 @@ def file_action(data):
         raise ValueError('文件位置不正确')
     route = validate_route(data['route'])
     command = 'python3 -c ' + shlex.quote(REMOTE_FILE_OPERATION_SCRIPT) + ' ' + shlex.quote(json.dumps(values))
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    result = run_hidden(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程文件操作失败')
     return json.loads(result.stdout)
 
 
 def rsync_binary():
-    candidates = [os.environ.get('TERMIUSPLUS_RSYNC'), '/opt/homebrew/bin/rsync', '/usr/local/bin/rsync', shutil.which('rsync')]
-    for candidate in candidates:
+    for candidate in platform_compat.rsync_candidates():
         if not candidate or not os.path.isfile(candidate):
             continue
-        output = subprocess.run([candidate, '--version'], capture_output=True, text=True).stdout
+        output = run_hidden([candidate, '--version'], capture_output=True, text=True).stdout
         if re.search(r'rsync\s+version\s+[3-9]\.', output):
             return candidate
-    raise ValueError('需要 rsync 3.x。macOS 可执行 brew install rsync，然后重新启动。系统自带 openrsync 不支持本工具的进度与续传参数。')
+    raise ValueError(platform_compat.rsync_missing_message())
 
 
 def local_info(path):
+    if platform_compat.is_drive_list_request(path):
+        return platform_compat.list_drives()
     root = Path(path).expanduser().resolve(strict=True)
     entries = []
     with os.scandir(root) as scan:
         for e in scan:
             try:
-                entries.append(dict(name=e.name, path=e.path, directory=e.is_dir(follow_symlinks=True), symlink=e.is_symlink(), size=e.stat(follow_symlinks=False).st_size))
+                entries.append(dict(name=e.name, path=platform_compat.display_path(e.path), directory=e.is_dir(follow_symlinks=True), symlink=e.is_symlink(), size=e.stat(follow_symlinks=False).st_size))
             except OSError:
                 continue
     entries.sort(key=lambda e: (not e['directory'], e['name'].casefold()))
-    return dict(path=str(root), entries=entries)
+    return dict(path=platform_compat.display_path(root), entries=entries)
 
 
 def measure(route, cancel=None):
     # An explicit SSH download probe, not ping latency. Upload performance may differ.
     command = "python3 -c 'import sys;sys.stdout.buffer.write(bytes(4*1024*1024))'"
-    process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    process = platform_compat.spawn(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     timer = threading.Timer(12, lambda: stop_process(process))
     timer.start()
     started = time.monotonic()
@@ -296,18 +326,14 @@ def measure(route, cancel=None):
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            platform_compat.kill_process(process)
             process.wait()
         process.stdout.close()
         process.stderr.close()
 
 
 def stop_process(process):
-    if process and process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+    platform_compat.stop_process(process)
 
 
 def should_switch(current, alternative):
@@ -389,9 +415,17 @@ def local_archive(root, items, cancelled=None, progress=None):
                     add(root / item, item)
         if cancelled and cancelled.is_set():
             raise ValueError('打包已取消')
-        # Publish without replacing an existing file.
-        os.link(temporary, destination)
-        temporary.unlink()
+        # Publish without replacing an existing file. link() fails if the destination
+        # exists. Windows volumes without hard links fall back to rename, which also
+        # refuses to replace an existing file.
+        try:
+            os.link(temporary, destination)
+        except OSError:
+            if os.name != 'nt':
+                raise
+            os.rename(temporary, destination)
+        else:
+            temporary.unlink()
         return str(destination)
     finally:
         if temporary.exists():
@@ -532,14 +566,20 @@ class Job:
                         resumable=transfer_history.resumable(self), legacyResume=bool(self.options.get('_legacy')), resumedFrom=self.options.get('_resumedFrom'))
 
     def command(self, binary, route, canonical, local):
-        remote = route['host'] + ':' + canonical.rstrip('/') + '/' if route else ''
-        local = local.rstrip('/') + '/'
+        style = platform_compat.rsync_path_style(binary)
+        local = platform_compat.directory_argument(local, style)
+        canonical_arg = platform_compat.directory_argument(canonical, style)
+        remote = route['host'] + ':' + canonical_arg if route else ''
         source, destination = (local, remote) if self.options['direction'] == 'upload' else (remote, local)
-        transport = ['-e', shlex.join(ssh_args(route))] if route else []
+        transport = ['-e', shlex.join(platform_compat.prepare_transport_args(ssh_args(route), style))] if route else []
         if self.options['direction'] == 'copy':
-            source, destination = local, canonical.rstrip('/') + '/'
+            source, destination = local, canonical_arg
         # No delete/inplace/append: partial data is a basis for a checked delta transfer.
-        selection = ['-r', '--from0', '--files-from=' + self.manifest] if self.manifest else []
+        if self.manifest:
+            manifest = platform_compat.to_rsync_path(self.manifest, style) if style not in ('native', None, '') else self.manifest
+            selection = ['-r', '--from0', '--files-from=' + manifest]
+        else:
+            selection = []
         return [binary, '-a', '-s', *selection, '--no-owner', '--no-group', '--partial-dir=.termiusplus-partial',
                 '--no-whole-file', '--info=progress2', '--no-inc-recursive', '--outbuf=L', '--timeout=30',
                 *transport, '--', source, destination]
@@ -566,7 +606,12 @@ class Job:
         try:
             buffer = b''
             while True:
-                chunk = os.read(process.stdout.fileno(), 4096)
+                try:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                except OSError:
+                    if os.name != 'nt':
+                        raise
+                    break
                 if not chunk:
                     break
                 buffer += chunk
@@ -581,7 +626,7 @@ class Job:
     def pack_remote(self, route, root, items):
         name = archive_name(validate_items(items))
         command = 'python3 -c ' + shlex.quote(REMOTE_ARCHIVE_SCRIPT) + ' ' + shlex.quote(root) + ' ' + shlex.quote(json.dumps(items)) + ' ' + shlex.quote(name)
-        self.process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.process = platform_compat.spawn(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = self.process.communicate()
         if self.process.returncode:
             raise ValueError(error.decode(errors='replace')[-1500:] or '远程打包失败')
@@ -598,15 +643,15 @@ class Job:
         self.result = {'archive': archive}
         if self.options['direction'] != 'pack':
             self.options['pack'] = False
-            self.options['items'] = [posixpath.basename(archive)]
+            self.options['items'] = [Path(archive).name]
             checkpoint()
         self.event('已生成 ' + archive)
-        return posixpath.basename(archive)
+        return Path(archive).name
 
     def run_copy(self):
         binary = rsync_binary()
-        source = Path(self.options['local']).expanduser().resolve(strict=True)
-        target = Path(self.options['destination']).expanduser().resolve(strict=True)
+        source = platform_compat.ensure_local_directory(self.options['local'])
+        target = platform_compat.ensure_local_directory(self.options['destination'])
         if not source.is_dir() or not target.is_dir():
             raise ValueError('源和目标必须是目录')
         if source == target:
@@ -623,7 +668,7 @@ class Job:
             return
         self.state = 'transferring'
         self.route = '本地 → 本地'
-        self.process = subprocess.Popen(self.command(binary, None, str(target), str(source)), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=dict(os.environ, LC_ALL='C'))
+        self.process = platform_compat.spawn(self.command(binary, None, str(target), str(source)), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=platform_compat.rsync_env())
         reader = threading.Thread(target=self.read_output, args=(self.process,), daemon=True)
         reader.start()
         code = self.process.wait()
@@ -656,9 +701,7 @@ class Job:
             routes = [validate_route(r) for r in self.options['routes']]
             if not routes:
                 raise ValueError('请添加至少一条线路')
-            local = str(Path(self.options['local']).expanduser().resolve(strict=True))
-            if not Path(local).is_dir():
-                raise ValueError('本地路径必须是目录')
+            local = str(platform_compat.ensure_local_directory(self.options['local']))
             path = self.options['remote']
             baseline = None
             canonical = None
@@ -724,7 +767,7 @@ class Job:
                 self.eta = ''
                 self.last_progress = time.monotonic()
                 self.event('使用 ' + self.route + ' 开始/续传')
-                self.process = subprocess.Popen(self.command(binary, current, canonical, local), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=dict(os.environ, LC_ALL='C'))
+                self.process = platform_compat.spawn(self.command(binary, current, canonical, local), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=platform_compat.rsync_env())
                 reader = threading.Thread(target=self.read_output, args=(self.process,), daemon=True)
                 reader.start()
                 replacement = None
@@ -764,7 +807,7 @@ class Job:
                 try:
                     code = self.process.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    os.killpg(self.process.pid, signal.SIGKILL)
+                    platform_compat.kill_process(self.process)
                     code = self.process.wait()
                 reader.join(timeout=3)
                 if self.cancel.is_set():
@@ -1046,11 +1089,11 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/status':
                 try:
                     binary = rsync_binary()
-                    dependency = dict(ok=True, path=binary)
+                    dependency = dict(ok=True, path=binary, pathStyle=platform_compat.rsync_path_style(binary))
                 except ValueError as exc:
                     dependency = dict(ok=False, error=str(exc))
                 checkpoint()
-                result = dict(terminal=True, remoteTasks=True, remoteLinks=remote_links(), rsync=dependency, home=str(Path.home()), jobs=[j.snapshot() for j in list(JOBS.values())])
+                result = dict(terminal=True, remoteTasks=True, remoteLinks=remote_links(), rsync=dependency, home=platform_compat.display_path(Path.home()), os=os.name, jobs=[j.snapshot() for j in list(JOBS.values())])
             elif self.path == '/api/local':
                 result = local_info(data['path'])
             elif self.path == '/api/remote':
@@ -1149,8 +1192,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=8765)
     args = parser.parse_args()
-    for sig in (signal.SIGHUP, signal.SIGTERM):
-        signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(KeyboardInterrupt()))
+    platform_compat.install_shutdown_signals(lambda signum, frame: (_ for _ in ()).throw(KeyboardInterrupt()))
     JOBS.update(transfer_history.restore(HISTORY_PATH, Job, RelayJob, RemoteJob))
     if STATE_ROOT == BASE / '.termiusplus-state':
         secondary = STATE_ROOT / 'remote-controller' / 'transfers.json'

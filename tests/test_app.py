@@ -7,6 +7,7 @@ from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
+import platform_compat
 
 class CoreTests(unittest.TestCase):
     def test_reject_command_hosts(self):
@@ -51,13 +52,16 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root/'nested').mkdir()
-            (root/'link').symlink_to(root/'nested', target_is_directory=True)
+            try:
+                (root/'link').symlink_to(root/'nested', target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             result = app.local_info(d)
             link = next(e for e in result['entries'] if e['name'] == 'link')
             self.assertTrue(link['directory'])
             (root/'nested'/'file').write_text('content')
             inside = app.local_info(link['path'])
-            self.assertEqual(inside['path'], str((root/'nested').resolve()))
+            self.assertEqual(Path(inside['path']), (root/'nested').resolve())
             self.assertEqual(inside['entries'][0]['name'], 'file')
             self.assertTrue(link['symlink'])
 
@@ -65,9 +69,12 @@ class CoreTests(unittest.TestCase):
         import json
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); (root/'target').mkdir(); (root/'target'/'file').write_text('sample')
-            (root/'projects').symlink_to(root/'target', target_is_directory=True)
-            (root/'broken').symlink_to(root/'missing')
-            (root/'file-link').symlink_to(root/'target'/'file')
+            try:
+                (root/'projects').symlink_to(root/'target', target_is_directory=True)
+                (root/'broken').symlink_to(root/'missing')
+                (root/'file-link').symlink_to(root/'target'/'file')
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             def listing(path):
                 return json.loads(subprocess.run([sys.executable, '-c', app.REMOTE_SCRIPT, str(path)], capture_output=True, check=True).stdout)
             entries = {e['name']:e for e in listing(root)['entries']}
@@ -93,8 +100,8 @@ class CoreTests(unittest.TestCase):
             (source/'nested').mkdir(); (source/'nested'/'file').write_text('nested')
             job = app.Job({'direction': 'upload'})
             command = job.command(binary, {'host': 'server'}, '/unused', str(source))
-            command[-1] = str(target) + '/'
-            subprocess.run(command, check=True, capture_output=True)
+            command[-1] = platform_compat.directory_argument(str(target), platform_compat.rsync_path_style(binary))
+            subprocess.run(command, check=True, capture_output=True, env=platform_compat.rsync_env())
             self.assertEqual((target/'new file').read_text(), 'new')
             self.assertEqual((target/'nested'/'file').read_text(), 'nested')
             self.assertEqual((target/'keep').read_text(), 'preserved')
@@ -113,9 +120,9 @@ class CoreTests(unittest.TestCase):
             (source/'payload').write_bytes(payload)
             job = app.Job({'direction': 'upload'})
             command = job.command(binary, {'host': 'server'}, '/unused', str(source))
-            command[-1] = str(target) + '/'
+            command[-1] = platform_compat.directory_argument(str(target), platform_compat.rsync_path_style(binary))
             slow = command[:1] + ['--bwlimit=64'] + command[1:]
-            process = subprocess.Popen(slow, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            process = platform_compat.spawn(slow, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=platform_compat.rsync_env())
             try:
                 time.sleep(1.2)
             finally:
@@ -129,7 +136,10 @@ class CoreTests(unittest.TestCase):
         import json
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            (root / "a' $(id)\nfile").write_text('sample')
+            try:
+                (root / "a' $(id)\nfile").write_text('sample')
+            except OSError:
+                self.skipTest('当前文件系统不接受该文件名')
             result = subprocess.run([sys.executable, '-c', app.REMOTE_SCRIPT, d], capture_output=True, check=True)
             info = json.loads(result.stdout)
             self.assertEqual(info['entries'][0]['name'], "a' $(id)\nfile")
@@ -211,7 +221,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())['rsyncVersion'],'rsync version 3.2.7')
 
     def test_cancel_stops_process_group(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+        process = platform_compat.spawn([sys.executable, '-c', 'import time; time.sleep(30)'])
         app.stop_process(process)
         self.assertNotEqual(process.wait(timeout=3), 0)
 

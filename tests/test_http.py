@@ -55,7 +55,8 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn(b'xterm.js', response.read())
         connection.close()
-        with patch('terminal_sessions.ssh_command', return_value=['/bin/sh', '-i']):
+        shell = [os.environ.get('COMSPEC', 'cmd.exe'), '/D', '/K'] if os.name == 'nt' else ['/bin/sh', '-i']
+        with patch('terminal_sessions.ssh_command', return_value=shell):
             status, result = self.request('/api/terminal/open', {'route':{'host':'fixture'},'cols':80,'rows':24})
             self.assertEqual(status, 200, result)
             identifier = result['id']

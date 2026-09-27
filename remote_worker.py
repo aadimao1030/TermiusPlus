@@ -31,7 +31,8 @@ def run(directory):
         if child[0] and child[0].poll() is None:
             try:os.killpg(child[0].pid,signal.SIGTERM)
             except ProcessLookupError:pass
-    signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGHUP,stop);signal.signal(signal.SIGINT,stop)
+    signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
+    if hasattr(signal,'SIGHUP'):signal.signal(signal.SIGHUP,stop)
     def watch():
         while not cancelled.wait(.25):
             if (directory/'cancel').exists():stop();return

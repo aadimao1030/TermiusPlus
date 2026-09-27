@@ -11,6 +11,7 @@ from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
+import platform_compat
 import transfer_history as history
 
 
@@ -25,7 +26,11 @@ class ResumeTests(unittest.TestCase):
             original = app.Job.command
             def command(job, binary, route, canonical, local):
                 args = original(job,binary,route,canonical,local)
-                args[-2:] = [str(source)+'/',local+'/'] if job.options['direction']=='download' else [local+'/',str(target)+'/']
+                style = platform_compat.rsync_path_style(binary)
+                src = platform_compat.directory_argument(str(source), style)
+                dst = platform_compat.directory_argument(str(target), style)
+                loc = platform_compat.directory_argument(local, style)
+                args[-2:] = [src, loc] if job.options['direction']=='download' else [loc, dst]
                 return args[:1]+(['--bwlimit=128'] if slow[0] else ['--stats'])+args[1:]
             slow=[True]
             with patch('app.Job.command',command),patch('app.remote_info',side_effect=lambda r,p,*a:dict(path=p,identity='fixture')),patch('app.HISTORY_PATH',root/'history.json'),patch.dict(app.JOBS,{},clear=True):

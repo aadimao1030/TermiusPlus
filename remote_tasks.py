@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+import platform_compat
 
 BOOTSTRAP = r'''
 import os,sys,json,base64,subprocess,shlex,shutil
@@ -63,7 +64,7 @@ def make_job_class(BaseJob, remote_info, ssh_args, checkpoint, base, info_script
             if config is not None:payload.update(config=config,worker=(Path(base)/'remote_worker.py').read_text())
             encoded=base64.b64encode(json.dumps(payload).encode()).decode()
             command='python3 -c '+shlex.quote(BOOTSTRAP)+' '+shlex.quote(encoded)
-            result=subprocess.run(ssh_args(self.route_config())+['-o','ForwardAgent=no',self.route_config()['host'],command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=35)
+            result=subprocess.run(ssh_args(self.route_config())+['-o','ForwardAgent=no',self.route_config()['host'],command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=35,**platform_compat.hidden_run_kwargs())
             if result.returncode:
                 error=result.stderr.decode(errors='replace')[-1500:] or '无法联系远程执行端'
                 raise (RemoteRejected if result.returncode!=255 else ValueError)(error)

@@ -1,21 +1,42 @@
 # TermiusPlus
 
-本机运行的远程文件工具：本地/远程多级目录树、rsync 目录上传下载、同一服务器的多条 SSH 线路择优与切换续传。界面通过本机浏览器使用，无第三方 Python 依赖。
+本机运行的远程文件工具：本地/远程多级目录树、rsync 目录上传下载、同一服务器的多条 SSH 线路择优与切换续传。界面通过本机浏览器使用，无第三方 Python 依赖。macOS、Linux 和 Windows 10/11 都可以从源码运行。界面截图在 `docs/images/`。
 
-## 启动
+## 从源码运行
 
-本地需要 Python 3.9+、OpenSSH 和 **rsync 3.x**。macOS 的系统 openrsync 不满足要求：
+本地需要 Python 3.9+ 和 OpenSSH。传输还需要 **rsync 3.x**。没装 rsync 时仍可浏览目录和使用终端，开始传输时会说明原因。服务只监听 `127.0.0.1`。
+
+打开终端输出的完整链接（包含 `#` 后的本次访问凭证）。按 Ctrl+C 停止服务和传输。需要重启后仍使用同一凭证（例如把链接收藏起来）时，可用环境变量 `TERMIUSPLUS_TOKEN` 指定固定凭证；不设置时每次启动生成新的随机凭证。
+
+远程机器需要 Python 3.6+ 与 **rsync 3.x**，无需部署本工具的服务端。认证使用 SSH 密钥/agent，不支持界面输入 SSH 密码。先在终端通过同样的 SSH 配置连接一次、确认主机指纹；工具不绕过主机指纹检查。
+
+### macOS 与 Linux
+
+macOS 的系统 openrsync 不满足要求，需要单独安装 rsync 3.x：
 
 ```sh
 brew install rsync
 python3 app.py
 ```
 
-打开终端输出的完整链接（包含 `#` 后的本次访问凭证）。可用 `python3 app.py --port 8766` 更换端口。服务仅监听 `127.0.0.1`。按 Ctrl+C 停止服务和传输。需要重启后仍使用同一凭证（例如把链接收藏起来）时，可用 `TERMIUSPLUS_TOKEN=固定凭证 python3 app.py` 启动；不设置时每次启动生成新的随机凭证。
+Linux 用发行版软件源安装 rsync 3.x 后，同样执行 `python3 app.py`。更换端口：`python3 app.py --port 8766`。指定 rsync：`TERMIUSPLUS_RSYNC=/自定义路径/rsync python3 app.py`。
 
-远程需要 Python 3.6+ 与 **rsync 3.x**，无需部署本工具的服务端。认证使用 SSH 密钥/agent，不支持界面输入 SSH 密码。先在终端通过同样的 SSH 配置连接一次、确认主机指纹；工具不绕过主机指纹检查。
+### Windows
 
-## 作为 App 使用
+安装 Python 3.9 或更高版本（安装程序里勾选 py launcher）以及 Windows 可选功能中的 OpenSSH 客户端。rsync 的安装方式见下方 Windows 前提。在项目目录执行：
+
+```bat
+py -3 app.py
+```
+
+`python app.py` 也可以。更换端口：`py -3 app.py --port 8766`。指定 rsync：
+
+```bat
+set TERMIUSPLUS_RSYNC=C:\msys64\usr\bin\rsync.exe
+py -3 app.py
+```
+
+## macOS App
 
 双击 `/Applications/TermiusPlus.app`（也可从启动台或程序坞打开）即可使用，无需复制链接或凭证。App 会在后台启动本目录的服务（默认端口 8765，被其他程序占用时自动换用下一个空闲端口），每次生成新的随机凭证，并在独立的原生窗口中打开界面。点窗口左上角的关闭按钮或按 Cmd+Q，App 会停止服务及其本机传输；App 异常退出时服务也会自动停止。有本机传输正在进行时，退出前会先确认。
 
@@ -25,11 +46,32 @@ python3 app.py
 - 服务日志：`~/Library/Logs/TermiusPlus/server.log`。
 - 代码在 `launcher/`：`main.swift` 是 App 本体（启动与停止服务、窗口、连接配置存储），`serve.py` 是服务入口（与 `app.py` 参数相同，App 退出时自动停止服务），`icon.swift` 生成图标，`build.sh` 编译并安装。修改这些文件或移动项目目录后，运行 `launcher/build.sh` 重新安装；只修改 `app.py` 等服务代码时无需重新编译，重新打开 App 即可生效。需要 Xcode 命令行工具（`xcode-select --install`）。
 
+## Windows App
+
+双击项目根目录的 `TermiusPlus.vbs`。它用本机 Python 启动服务（默认端口 8765，被占用时改用后面的空闲端口），并用 Microsoft Edge 或 Google Chrome 的应用模式打开独立窗口。浏览器使用单独的配置目录，不会打开日常使用的窗口。关闭这个窗口后，本次由 App 启动的服务会停止。
+
+- 再次双击时，如果上次由 App 启动的服务还在运行，会继续用它再开一个窗口，这个新窗口关掉不会停止服务。先打开的那个窗口关掉时才会停止。
+- 在终端里手动执行 `py -3 app.py` 时，App 认不出那个进程的凭证，会改用下一个端口，并且不会把它关掉。两边共用项目里的 `.termiusplus-state`，不要同时跑两个传输。
+- 连接配置保存在独立浏览器配置的 localStorage 里，目录是 `%LOCALAPPDATA%\TermiusPlus\browser-profile`。
+- 服务日志：`%LOCALAPPDATA%\TermiusPlus\server.log`。带凭证的链接也会写在这个日志里。
+- 没有安装 Edge 和 Chrome 时，会尝试用默认浏览器打开，并弹出说明。点确定后，本次启动的服务会停止。也可以设置 `TERMIUSPLUS_BROWSER` 为 `msedge.exe` 或 `chrome.exe` 的完整路径。
+- 代码在 `launcher/windows_app.py`，不需要打包。修改 `app.py` 后重新双击即可。`TermiusPlus.bat` 是带控制台窗口的同样入口，适合排查启动失败。
+- 这不取代源码运行。仍然可以直接 `py -3 app.py`，自己用浏览器打开终端里打印的链接。
+
+## Windows 前提
+
+1. **Python 3.9+**。从 python.org 安装，并勾选 py launcher。App 入口优先使用 `pyw -3`，找不到时再用 `pythonw`。
+2. **OpenSSH 客户端**。在 设置 > 应用 > 可选功能 中启用 OpenSSH 客户端，或确认命令 `ssh` 可用。工具会依次查找 PATH 和 `C:\Windows\System32\OpenSSH\ssh.exe`。认证仍使用密钥或 agent，不在界面里输入密码。先在终端用同样的配置连一次，确认主机指纹。
+3. **rsync 3.x**，只有传输需要。Windows 没有自带可用的 rsync。推荐 MSYS2：安装后在 MSYS2 终端执行 `pacman -S rsync`，然后设置 `TERMIUSPLUS_RSYNC` 为 `C:\msys64\usr\bin\rsync.exe`（路径以实际安装位置为准）。MSYS2 和 Git for Windows 使用 msys 路径（`/c/Users/...`），这是默认值。Git 官方安装包不一定带 rsync；如果 `C:\Program Files\Git\usr\bin\rsync.exe` 存在，也可以把它设为 `TERMIUSPLUS_RSYNC`。cwRsync 使用 Cygwin 路径，需要额外设置 `TERMIUSPLUS_RSYNC_PATH_STYLE=cygwin`。未设置环境变量时，还会在 PATH、`C:\msys64\usr\bin`、Git 的 `usr\bin` 和常见 cwRsync 目录里查找。调用 rsync 时会设置 `MSYS_NO_PATHCONV=1`，避免 MSYS 再改写参数。
+4. **本地终端**使用系统自带的 ConPTY（Windows 10 1809 和 Windows 11），不需要 pywinpty 或其他 Python 包。默认打开 PowerShell，并把控制台输入输出设为 UTF-8；找不到 PowerShell 时使用 `COMSPEC`（一般是 cmd）。可以用 `TERMIUSPLUS_SHELL` 指定 `powershell.exe`、`pwsh.exe` 或 `cmd.exe` 的完整路径。终端从当前本地目录启动。更老的 Windows 上打开本地终端会提示失败，文件浏览不受影响。
+5. **路径**。本地栏使用 `C:/Users/...` 这种正斜杠路径。从磁盘根目录再向上会进入“此电脑”，列出已连接的盘符。不能把“此电脑”本身当作传输目录。
+6. **做不到和 Unix 完全一样的部分**会给出说明而不是直接崩溃：安全重命名在 Windows 上用不会覆盖同名文件的 `os.rename`，不是 Linux 的 `renameat2`；取消传输用 `taskkill /F /T` 结束进程树；文件权限的 chmod 只按 Windows 能表达的方式处理；创建符号链接可能需要开发者模式或管理员权限。远程独立会话的执行端仍然必须是带 tmux、Python 3.6+ 和 rsync 3.x 的服务器，Windows 只作为控制端。
+
 ## 使用
 
 1. 添加直连、不同 IP 或跳板线路。主机可填 `~/.ssh/config` 中的别名，例如 `server-direct`、`server-jump`。别名的非默认端口也需要填写到界面中。跳板也可直接填 `user@bastion:22`。密钥留空时使用 SSH 配置/agent。
 2. 点击任一栏顶部的位置标题，选择“本地”或任一已保存的远程连接。两栏独立，可本地↔远程、本地↔本地或远程↔远程。点击圆形箭头刷新当前目录；眼睛按钮切换隐藏文件显示，默认不显示，并分别记住每栏设置。此设置只影响浏览，传输整个目录时仍包含隐藏文件。
-3. 点击三角展开多个层级；双击文件夹进入。点击行选中，Cmd/Ctrl 点击可多选。把文件或文件夹拖到另一栏即可确认传输，拖到文件夹上则以该文件夹为目标。也可直接把 Finder 中的文件或文件夹拖入任意一栏。浏览器会先将外部拖放内容暂存到本机，再使用 rsync 传输，需要额外本地磁盘空间。远程↔远程通过本机临时目录分两步中转，同样需要本地空间。
+3. 点击三角展开多个层级；双击文件夹进入。点击行选中，Cmd/Ctrl 点击可多选。把文件或文件夹拖到另一栏即可确认传输，拖到文件夹上则以该文件夹为目标。也可直接把访达或资源管理器中的文件或文件夹拖入任意一栏。浏览器会先将外部拖放内容暂存到本机，再使用 rsync 传输，需要额外本地磁盘空间。远程↔远程通过本机临时目录分两步中转，同样需要本地空间。
 
    选中后点击“打包”或按 **Cmd/Ctrl+Shift+P**，在源目录生成 tar.gz，保留原文件；传输确认框也可勾选“先打包再传输”。**Cmd/Ctrl+Enter** 从当前栏传到另一栏，**Cmd/Ctrl+R** 刷新当前栏。未选中项目时，传输的是源目录的内容；会更新目标同名文件，不会删除目标多余文件。指向文件夹的软链接可点击三角展开、双击或按 Enter 进入目标目录，并保留 ↗ 标记。展开时只读取下一层，不自动递归链接。直接传输或打包链接本身仍保留链接；进入目标目录后可传输其中的内容。
 
@@ -42,7 +84,7 @@ python3 app.py
 
 线路配置保存在该浏览器的 localStorage，仅包含名称、主机、端口、跳板、密钥路径；不会读取或存储私钥内容。任务记录和日志保存在本机 `.termiusplus-state/transfers.json`，重启后恢复。工具每次只运行一个传输任务，防止任务同时写入同一目录。
 
-可通过 `TERMIUSPLUS_RSYNC=/自定义路径/rsync python3 app.py` 指定 rsync 3.x。
+可通过 `TERMIUSPLUS_RSYNC` 指定 rsync 3.x，macOS/Linux 示例：`TERMIUSPLUS_RSYNC=/自定义路径/rsync python3 app.py`。Windows 见上方 Windows 前提。
 
 ## 取消与续传
 
@@ -50,9 +92,9 @@ python3 app.py
 
 记录与 Finder 暂存、中转副本会保留到工具目录的 `.termiusplus-state/`，服务重启后仍可继续。完成的中转、Finder 暂存会自动清理；未完成数据会占用磁盘空间。已完成的打包结果会复用，不重复打包。中断在打包尚未完成时，会重新完成打包。旧版记录缺少连接参数时，先在两栏打开原源和目标目录，再点“续传”并核对确认框；仅能复用仍然存在的未完成数据。
 
-## 远程独立会话：Mac 断联仍继续
+## 远程独立会话：本机断联仍继续
 
-两栏选择远程 A 和 B 后，在传输确认框选择“远程会话（Mac 断联后继续）”。可在 A 推送，也可在 B 拉取；填写执行端独立登录另一端所用的 SSH 地址、端口，以及执行端自身的密钥路径（可选）。本机 SSH 别名或密钥路径不一定适用于执行端。两端需要 Python 3.6+、rsync 3.x，执行端需要 tmux，且必须能独立使用密钥登录另一端、已确认主机指纹。不会复制 Mac 私钥或使用 Mac 的 agent 转发。
+两栏选择远程 A 和 B 后，在传输确认框选择“远程会话（Mac 断联后继续）”。可在 A 推送，也可在 B 拉取；填写执行端独立登录另一端所用的 SSH 地址、端口，以及执行端自身的密钥路径（可选）。本机 SSH 别名或密钥路径不一定适用于执行端。两端需要 Python 3.6+、rsync 3.x，执行端需要 tmux，且必须能独立使用密钥登录另一端、已确认主机指纹。不会复制本机私钥或使用本机的 agent 转发。Windows 作为控制端时同样适用：本机断网或关掉窗口后，已经在服务器上启动的会话继续运行。
 
 确认框会记住同一执行端与对端的 SSH 地址、端口和远程密钥路径。已验证的连接默认值也可保存在 `.termiusplus-state/remote-links.json`；其中只记录路径，不保存私钥。修改执行端或对端后会选取对应设置。
 
@@ -64,7 +106,7 @@ python3 app.py
 
 ## 终端
 
-点击顶部“终端”，或远程文件栏顶部的 `>_` 按钮，打开交互式终端。标签旁的“＋”第一项固定是“本地 · 这台电脑”，用本机的登录 shell（`$SHELL`，取不到时用 `/bin/sh`）在选定的本地目录打开一个本地终端；本地文件栏顶部的 `>_` 按钮直接打开该目录的本地终端。选择服务器则按原方式打开 SSH 终端；从远程文件栏打开时使用当前远程目录。本地会话与远程会话可同时存在于同一终端页面，互不影响。
+点击顶部“终端”，或远程文件栏顶部的 `>_` 按钮，打开交互式终端。标签旁的“＋”第一项固定是“本地 · 这台电脑”。macOS 和 Linux 用本机的登录 shell（`$SHELL`，取不到时用 `/bin/sh`）；Windows 用 PowerShell，找不到时用 cmd，也可以用 `TERMIUSPLUS_SHELL` 指定程序。本地终端在选定的本地目录打开；本地文件栏顶部的 `>_` 按钮直接打开该目录的本地终端。选择服务器则按原方式打开 SSH 终端；从远程文件栏打开时使用当前远程目录。本地会话与远程会话可同时存在于同一终端页面，互不影响。
 
 支持方向键历史、Tab 补全、Ctrl+C、终端大小调整、选择复制与多标签切换，同一终端页面可同时连接最多 8 个会话：点击“＋”选择本地或某台服务器，点击标签切换；切换时后台会话继续运行并接收输出，终端内容、输入与目录互相独立。也可为同一位置打开多个会话。标签上的 × 关闭该会话；已结束的标签可点击重新连接。本地终端与远程终端共用同一套限制：同一位置再次打开会切回已有标签，除非先关闭它。顶部不再常驻连接、目录设置与操作工具栏。Ctrl+C 中断、Ctrl+L 清屏、⌘/Ctrl+Shift+C 复制仍可直接使用。远程认证沿用已有密钥、agent 和跳板配置，仍要求预先确认主机指纹。终端不自动切换线路，以免丢失交互会话；长时间命令可在远程使用 tmux。
 
@@ -81,6 +123,8 @@ python3 app.py
 ```sh
 python3 -m unittest discover -s tests -v
 ```
+
+Windows 上对应的命令是 `py -3 -m unittest discover -s tests -v`。GitHub Actions 会在 Ubuntu、macOS 和 Windows 上运行这套测试，并在 macOS 上编译 `TermiusPlus.app`。
 
 测试覆盖初始线路择优、异机线路排除、网络故障切换、参数校验、特殊路径处理、不删除目标文件、续传设置、线路切换阈值、真实本地 rsync 传输、中断续传与取消（真实 rsync 测试在未安装 3.x 时跳过）。远程连接、跳板、真实网络择优需要你自己的服务器环境验证。
 

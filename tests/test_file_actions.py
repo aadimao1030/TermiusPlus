@@ -18,7 +18,11 @@ class FileActionTests(unittest.TestCase):
 
     def test_trash_symlink_does_not_touch_target(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);target=root/'folder';target.mkdir();(target/'file').write_text('keep');link=root/'link';link.symlink_to(target,target_is_directory=True)
+            root=Path(directory);target=root/'folder';target.mkdir();(target/'file').write_text('keep');link=root/'link'
+            try:
+                link.symlink_to(target,target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             result=app.file_operation(directory,str(link),'trash')
             self.assertFalse(link.is_symlink());self.assertTrue(Path(result['path']).is_symlink());self.assertEqual((target/'file').read_text(),'keep')
 
@@ -43,6 +47,11 @@ class FileActionTests(unittest.TestCase):
 
     def test_trash_rejects_linked_trash_directory(self):
         with tempfile.TemporaryDirectory() as directory,tempfile.TemporaryDirectory() as other:
-            root=Path(directory);(root/'.termiusplus-trash').symlink_to(other,target_is_directory=True);file=root/'file';file.write_text('keep')
+            root=Path(directory)
+            try:
+                (root/'.termiusplus-trash').symlink_to(other,target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
+            file=root/'file';file.write_text('keep')
             with self.assertRaises(ValueError):app.file_operation(directory,str(file),'trash')
             self.assertTrue(file.exists())

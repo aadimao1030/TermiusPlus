@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
+import platform_compat
 
 
 class FilesTests(unittest.TestCase):
@@ -24,7 +25,11 @@ class FilesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); source = root/'src'; target = root/'dst'
             source.mkdir(); target.mkdir()
-            (source/'folder name').mkdir(); (source/'folder name'/'中文\nfile').write_text('nested')
+            (source/'folder name').mkdir()
+            try:
+                (source/'folder name'/'中文\nfile').write_text('nested')
+            except OSError:
+                self.skipTest('当前文件系统不接受文件名中的换行')
             (source/'-file name').write_text('file')
             (source/'unselected').write_text('leave')
             (target/'preserve').write_text('keep')
@@ -32,8 +37,8 @@ class FilesTests(unittest.TestCase):
             job.manifest = app.create_manifest(['folder name', '-file name'])
             try:
                 command = job.command(binary, {'host': 'test'}, '/unused', str(source))
-                command[-1] = str(target)+'/'
-                subprocess.run(command, capture_output=True, check=True)
+                command[-1] = platform_compat.directory_argument(str(target), platform_compat.rsync_path_style(binary))
+                subprocess.run(command, capture_output=True, check=True, env=platform_compat.rsync_env())
                 self.assertEqual((target/'folder name'/'中文\nfile').read_text(), 'nested')
                 self.assertEqual((target/'-file name').read_text(), 'file')
                 self.assertFalse((target/'unselected').exists())
@@ -46,7 +51,10 @@ class FilesTests(unittest.TestCase):
             root = Path(d)
             (root/'资料 folder').mkdir(); (root/'资料 folder'/'empty').mkdir()
             (root/'资料 folder'/'a $(id).txt').write_text('hello')
-            (root/'link').symlink_to('资料 folder')
+            try:
+                (root/'link').symlink_to('资料 folder')
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             result = app.local_archive(root, ['资料 folder', 'link'])
             with tarfile.open(result) as archive:
                 self.assertIn('资料 folder/empty', archive.getnames())
@@ -80,7 +88,10 @@ class FilesTests(unittest.TestCase):
     def test_archive_rejects_symlinked_parent_escape(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as other:
             root = Path(d); (Path(other)/'secret').write_text('secret')
-            (root/'link').symlink_to(other, target_is_directory=True)
+            try:
+                (root/'link').symlink_to(other, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             with self.assertRaises(ValueError):
                 app.local_archive(root, ['link/secret'])
 
