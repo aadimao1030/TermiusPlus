@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install rsync (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rsync
+      - name: Install rsync (macOS)
+        if: runner.os == 'macOS'
+        run: brew install rsync
+      - name: Install rsync (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: false
+          install: rsync
+          path-type: inherit
+      - name: Show rsync version
+        run: rsync --version
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  macos-app:
+    name: macOS app build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build TermiusPlus.app
+        run: bash launcher/build.sh "$RUNNER_TEMP/Applications"

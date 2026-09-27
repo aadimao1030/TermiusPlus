@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app
+import termiusplus.server as app
 
 
 class HttpTests(unittest.TestCase):
@@ -48,14 +48,15 @@ class HttpTests(unittest.TestCase):
 
     def test_terminal_assets_and_authenticated_shell_endpoint(self):
         from unittest.mock import patch
-        import terminal_sessions
+        import termiusplus.terminal_sessions as terminal_sessions
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=10)
         connection.request('GET', '/terminal')
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
         self.assertIn(b'xterm.js', response.read())
         connection.close()
-        with patch('terminal_sessions.ssh_command', return_value=['/bin/sh', '-i']):
+        shell = [os.environ.get('COMSPEC', 'cmd.exe'), '/D', '/K'] if os.name == 'nt' else ['/bin/sh', '-i']
+        with patch('termiusplus.terminal_sessions.ssh_command', return_value=shell):
             status, result = self.request('/api/terminal/open', {'route':{'host':'fixture'},'cols':80,'rows':24})
             self.assertEqual(status, 200, result)
             identifier = result['id']
@@ -74,11 +75,11 @@ class HttpTests(unittest.TestCase):
                 terminal_sessions.SESSIONS.pop(identifier, None)
 
     def test_terminal_local_shell_endpoint(self):
-        import terminal_sessions
+        import termiusplus.terminal_sessions as terminal_sessions
         with tempfile.TemporaryDirectory() as directory:
             canonical = os.path.realpath(directory)
             command = [sys.executable, '-u', '-c', "import os;print('LOCAL_CWD',os.getcwd(),flush=True)"]
-            with patch('terminal_sessions.local_command', return_value=(command, canonical)):
+            with patch('termiusplus.terminal_sessions.local_command', return_value=(command, canonical)):
                 status, result = self.request('/api/terminal/open', {'local':True,'path':directory,'cols':80,'rows':24})
                 self.assertEqual(status, 200, result)
                 self.assertTrue(result['local'])
@@ -104,7 +105,7 @@ class HttpTests(unittest.TestCase):
             source.mkdir(); target.mkdir(); (source/'file').write_text('resume')
             options=dict(direction='copy',local=str(source),destination=str(target),items=['file'])
             previous=app.Job(options.copy());previous.state='cancelled'
-            with patch.dict(app.JOBS,{previous.id:previous},clear=True),patch('app.HISTORY_PATH',root/'history.json'),patch('app.launch'):
+            with patch.dict(app.JOBS,{previous.id:previous},clear=True),patch('termiusplus.server.HISTORY_PATH',root/'history.json'),patch('termiusplus.server.launch'):
                 status,result=self.request('/api/resume',{'id':previous.id})
                 self.assertEqual(status,200,result)
                 resumed=app.JOBS[result['id']]

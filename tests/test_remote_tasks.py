@@ -10,9 +10,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import app
-import remote_tasks
-import transfer_history
+import termiusplus.server as app
+import termiusplus.remote_tasks as remote_tasks
+import termiusplus.transfer_history as transfer_history
 
 class RemoteTasksTests(unittest.TestCase):
     def test_real_tmux_transfer_survives_launcher_exit_both_directions(self):
@@ -36,7 +36,7 @@ class RemoteTasksTests(unittest.TestCase):
                 output=subprocess.check_output([sys.executable,'-c',script,str(peer),'identity'])
                 identity=json.loads(output)['identity']
                 config=dict(source=str(source),destination=str(target),pull=pull,target=dict(host='fixture',port=22),identity=identity,infoScript=script,items=['payload'],pack=False)
-                p=dict(op='start',id=identifier,config=config,worker=Path('remote_worker.py').read_text())
+                p=dict(op='start',id=identifier,config=config,worker=(Path(__file__).resolve().parents[1]/'termiusplus'/'remote_worker.py').read_text())
                 encoded=base64.b64encode(json.dumps(p).encode()).decode()
                 # This launching process exits immediately; no controller remains running.
                 result=subprocess.run([sys.executable,'-c',remote_tasks.BOOTSTRAP,encoded],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)
@@ -61,7 +61,7 @@ class RemoteTasksTests(unittest.TestCase):
             def call(operation,config=None):
                 calls.append(operation)
                 return dict(state='completed',progress=100,session='tp-'+job.id,log=[])
-            with patch.object(restored,'call',side_effect=call),patch('app.checkpoint'):
+            with patch.object(restored,'call',side_effect=call),patch('termiusplus.server.checkpoint'):
                 restored.run()
             self.assertEqual(calls,['poll'])
             restored.state='cancelled';resumed=app.new_transfer(restored.options,restored)

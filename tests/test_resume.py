@@ -10,8 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app
-import transfer_history as history
+import termiusplus.server as app
+import termiusplus.platform_compat as platform_compat
+import termiusplus.transfer_history as history
 
 
 class ResumeTests(unittest.TestCase):
@@ -25,10 +26,14 @@ class ResumeTests(unittest.TestCase):
             original = app.Job.command
             def command(job, binary, route, canonical, local):
                 args = original(job,binary,route,canonical,local)
-                args[-2:] = [str(source)+'/',local+'/'] if job.options['direction']=='download' else [local+'/',str(target)+'/']
+                style = platform_compat.rsync_path_style(binary)
+                src = platform_compat.directory_argument(str(source), style)
+                dst = platform_compat.directory_argument(str(target), style)
+                loc = platform_compat.directory_argument(local, style)
+                args[-2:] = [src, loc] if job.options['direction']=='download' else [loc, dst]
                 return args[:1]+(['--bwlimit=128'] if slow[0] else ['--stats'])+args[1:]
             slow=[True]
-            with patch('app.Job.command',command),patch('app.remote_info',side_effect=lambda r,p,*a:dict(path=p,identity='fixture')),patch('app.HISTORY_PATH',root/'history.json'),patch.dict(app.JOBS,{},clear=True):
+            with patch('termiusplus.server.Job.command',command),patch('termiusplus.server.remote_info',side_effect=lambda r,p,*a:dict(path=p,identity='fixture')),patch('termiusplus.server.HISTORY_PATH',root/'history.json'),patch.dict(app.JOBS,{},clear=True):
                 first=app.RelayJob(copy.deepcopy(options));app.JOBS[first.id]=first
                 thread=threading.Thread(target=first.run);thread.start()
                 deadline=time.monotonic()+8
@@ -68,7 +73,7 @@ class ResumeTests(unittest.TestCase):
             root=Path(directory);(root/'file').write_text('pack')
             first=app.Job(dict(direction='upload',routes=[{'host':'fixture'}],local=directory,remote='/tmp/target',items=['file'],pack=True,stage='fixture'))
             key=first.transfer_key
-            with patch('app.HISTORY_PATH',root/'history.json'),patch.dict(app.JOBS,{},clear=True):
+            with patch('termiusplus.server.HISTORY_PATH',root/'history.json'),patch.dict(app.JOBS,{},clear=True):
                 first.pack(root=directory);first.state='cancelled'
                 archive=first.result['archive']
                 self.assertFalse(first.options['pack'])

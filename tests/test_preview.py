@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import app
+import termiusplus.server as app
 
 
 class PreviewTests(unittest.TestCase):
@@ -16,7 +16,11 @@ class PreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'中文.html'; text = '<script>alert("sample")</script>\n你好'
             p.write_text(text, encoding='utf-8')
-            link = Path(d)/'link'; link.symlink_to(p)
+            link = Path(d)/'link'
+            try:
+                link.symlink_to(p)
+            except OSError as exc:
+                self.skipTest('symlinks unavailable: %s' % exc)
             result = app.file_preview(str(link))
             self.assertEqual(result['kind'], 'text')
             self.assertEqual(result['content'], text)
@@ -49,8 +53,9 @@ class PreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/'binary'; p.write_bytes(b'abc\0\xff')
             self.assertEqual(app.file_preview(str(p))['kind'], 'unsupported')
-            fifo = Path(d)/'pipe'; os.mkfifo(fifo)
-            with self.assertRaises(ValueError): app.file_preview(str(fifo))
+            if hasattr(os, 'mkfifo'):
+                fifo = Path(d)/'pipe'; os.mkfifo(fifo)
+                with self.assertRaises(ValueError): app.file_preview(str(fifo))
             with self.assertRaises((ValueError, OSError)): app.file_preview(d)
             with self.assertRaises(OSError): app.file_preview(str(Path(d)/'missing'))
 
@@ -58,7 +63,7 @@ class PreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)/"a' $(id).txt"; p.write_text('remote sample')
             output = subprocess.run([sys.executable, '-c', app.REMOTE_PREVIEW_SCRIPT, str(p)], capture_output=True, check=True)
-            with patch('app.subprocess.run', return_value=output) as run:
+            with patch('termiusplus.server.subprocess.run', return_value=output) as run:
                 result = app.remote_preview({'host':'fixture'}, str(p))
                 self.assertEqual(result['content'], 'remote sample')
                 import shlex

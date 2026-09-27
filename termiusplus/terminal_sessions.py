@@ -1,20 +1,28 @@
-"""Bounded interactive local and SSH shell sessions backed by a local PTY."""
+"""Bounded interactive local and SSH shell sessions.
+
+POSIX sessions use a local PTY. Windows sessions use ConPTY (see platforms/windows/conpty.py)
+so PowerShell or cmd can run without a third-party package. The worker that
+sets a controlling terminal is POSIX-only; Windows OpenSSH already treats a
+pseudoconsole as a console.
+"""
 import base64
 import collections
 import errno
-import fcntl
 import os
-import pty
 import secrets
-import select
 import signal
-import struct
 import subprocess
 import sys
-import termios
 import threading
 import time
 from pathlib import Path
+
+if os.name == 'posix':
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
 
 SESSIONS = {}
 SESSIONS_LOCK = threading.RLock()
@@ -29,15 +37,25 @@ def dimensions(cols, rows):
 
 
 def local_command(path):
-    """A login shell on this Mac, started in the selected local directory."""
+    """A shell in the selected local directory.
+
+    POSIX uses the login shell ($SHELL, or /bin/sh). Windows uses PowerShell
+    when it is installed, otherwise cmd. cwd is the directory, so the shell
+    starts there without a POSIX -l flag.
+    """
+    from . import platform_compat
     if not isinstance(path, str) or '\0' in path or len(path) > 8192:
         raise ValueError('终端目录不正确')
+    if platform_compat.is_drive_list_request(path):
+        raise ValueError('请先进入某个磁盘目录，再打开本地终端')
     try:
         directory = (Path(path).expanduser() if path else Path.home()).resolve(strict=True)
     except OSError:
         raise ValueError('本地终端目录不存在，请先在文件栏打开一个目录')
     if not directory.is_dir():
         raise ValueError('本地终端目录不是文件夹，请先在文件栏打开一个目录')
+    if os.name == 'nt':
+        return platform_compat.windows_shell_command(), str(directory)
     shell = os.environ.get('SHELL', '')
     if not os.path.isabs(shell) or not os.access(shell, os.X_OK):
         shell = '/bin/sh'
@@ -72,17 +90,28 @@ class TerminalSession:
         self.closed = False
         self.done = False
         self.last_seen = time.monotonic()
-        master, slave = pty.openpty()
-        self.master = master
-        try:
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-            self.process = subprocess.Popen([sys.executable, str(WORKER), *command], stdin=slave, stdout=slave, stderr=slave,
-                                            start_new_session=True, close_fds=True, cwd=cwd, env=dict(os.environ, TERM='xterm-256color'))
-        except BaseException:
-            os.close(master)
-            raise
-        finally:
-            os.close(slave)
+        self.master = None
+        self._conpty = None
+        env = dict(os.environ, TERM='xterm-256color')
+        if os.name == 'nt':
+            from platforms.windows import conpty as win_conpty
+            try:
+                self._conpty = win_conpty.ConPTY(list(command), cols, rows, cwd=cwd, env=env)
+            except OSError as exc:
+                raise ValueError('无法打开 Windows 终端：%s' % exc)
+            self.process = win_conpty.ConPTYProcess(self._conpty)
+        else:
+            master, slave = pty.openpty()
+            self.master = master
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+                self.process = subprocess.Popen([sys.executable, str(WORKER), *command], stdin=slave, stdout=slave, stderr=slave,
+                                                start_new_session=True, close_fds=True, cwd=cwd, env=env)
+            except BaseException:
+                os.close(master)
+                raise
+            finally:
+                os.close(slave)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -97,6 +126,17 @@ class TerminalSession:
     def _read(self):
         try:
             while not self.closed:
+                if self._conpty is not None:
+                    try:
+                        block = self._conpty.read(16384)
+                    except OSError as exc:
+                        if exc.errno in (errno.EIO, errno.EBADF, 109, 232, 995):
+                            break
+                        raise
+                    if not block:
+                        break
+                    self._append(block)
+                    continue
                 ready, _, _ = select.select([self.master], [], [], .25)
                 if not ready:
                     if self.process.poll() is not None:
@@ -150,8 +190,14 @@ class TerminalSession:
             raise ValueError('终端输入过长')
         self.last_seen = time.monotonic()
         with self.write_lock:
-            if self.closed or self.done or self.master is None:
+            if self.closed or self.done or (self.master is None and self._conpty is None):
                 raise ValueError('终端已断开，请重新连接')
+            if self._conpty is not None:
+                try:
+                    self._conpty.write(bytes(content))
+                except OSError:
+                    raise ValueError('终端输入失败，请检查连接')
+                return
             view = memoryview(content)
             deadline = time.monotonic()+5
             while view:
@@ -166,7 +212,13 @@ class TerminalSession:
         dimensions(cols, rows)
         self.last_seen = time.monotonic()
         with self.write_lock:
-            if self.closed or self.done or self.master is None:
+            if self.closed or self.done or (self.master is None and self._conpty is None):
+                return
+            if self._conpty is not None:
+                try:
+                    self._conpty.resize(cols, rows)
+                except OSError:
+                    pass
                 return
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
 
@@ -176,6 +228,10 @@ class TerminalSession:
                 return
             self.closed = True
             self.condition.notify_all()
+        if self._conpty is not None:
+            self._conpty.close()
+            self.reader.join(timeout=4)
+            return
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGHUP)

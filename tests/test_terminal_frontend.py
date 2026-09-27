@@ -125,7 +125,7 @@ JET={'name':'jet','host':'jet.example','port':22,'jump':'','key':''}
 
 class TerminalFrontendTests(unittest.TestCase):
     def run_frontend(self, config, assertions):
-        html=(ROOT/'terminal.html').read_text()
+        html=(ROOT/'web'/'terminal.html').read_text()
         frontend=html[html.index("'use strict';"):html.rindex('</script>')]
         config=dict(config,routes=[dict(JET)],filesUrl='http://127.0.0.1:19387/#TOKEN')
         code=DOM.replace('__CONFIG__',json.dumps(json.dumps(config)))+frontend+assertions
@@ -140,7 +140,7 @@ class TerminalFrontendTests(unittest.TestCase):
         self.run_frontend(dict(local=False,route=None,path='',localPath='/tmp/local dir',autoConnect=False),PICKER_ONLY_ASSERTIONS)
 
     def test_file_pane_terminal_buttons_map_to_local_or_the_pane_connection(self):
-        html=(ROOT/'index.html').read_text()
+        html=(ROOT/'web'/'index.html').read_text()
         head=html[html.index(' closeMenus();const p=panes[side]'):]
         head=head[:head.index('autoConnect:!!(remote||local)};')+len('autoConnect:!!(remote||local)};')]
         jet={'name':'jet','host':'jet.example','port':22,'jump':'','key':''}

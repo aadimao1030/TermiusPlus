@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import urllib.request
-import app
+from . import server as app
 
 token=os.environ.get('TERMIUSPLUS_REMOTE_TOKEN')
 if not token:raise SystemExit('请设置 TERMIUSPLUS_REMOTE_TOKEN 为文件服务的访问凭证')

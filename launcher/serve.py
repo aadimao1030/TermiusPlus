@@ -27,7 +27,7 @@ def watch_parent():
 
 threading.Thread(target=watch_parent, daemon=True).start()
 
-import app  # noqa: E402
+import app  # noqa: E402  根目录薄入口，转调 termiusplus.server
 
 sys.argv = ['app.py'] + sys.argv[1:]
 app.main()

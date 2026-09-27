@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import app
+import termiusplus.server as app
 
 
 class ProgressTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class ProgressTests(unittest.TestCase):
         self.assertNotEqual(result['state'],'completed')
 
     def test_frontend_legacy_running_job_and_current_snapshot(self):
-        html=(Path(__file__).resolve().parents[1]/'index.html').read_text()
+        html=(Path(__file__).resolve().parents[1]/'web'/'index.html').read_text()
         code=html[html.index('function transferMetrics('):html.index('const logViews=')]
         assertions="""
 const assert=require('node:assert/strict');
