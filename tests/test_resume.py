@@ -11,7 +11,7 @@ from unittest.mock import patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
-import transfer_history as history
+from termiusplus import transfer_history as history
 
 
 class ResumeTests(unittest.TestCase):

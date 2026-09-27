@@ -2,17 +2,24 @@
 import argparse
 import http.client
 import os
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
 
 class Handler(app.Handler):
     def do_POST(self):
-        if self.path == '/api/files':
+        if self.path == '/api/files' or self.path.startswith('/api/terminal/'):
             return super().do_POST()
         expected = '127.0.0.1:%s' % self.server.server_port
         if self.headers.get('Host') != expected or self.headers.get('Authorization') != 'Bearer '+app.TOKEN or self.headers.get('Origin', 'http://'+expected) != 'http://'+expected:
             self.send_json({'error':'访问凭证或来源不正确'},403)
             return
-        length = int(self.headers.get('Content-Length',0))
+        try:
+            length = int(self.headers.get('Content-Length',0))
+        except ValueError:
+            self.send_json({'error':'请求长度不正确'},400)
+            return
         if not 0 <= length <= 4*1024*1024:
             self.send_json({'error':'请求过大'},400)
             return
@@ -48,4 +55,5 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         pass
     finally:
+        app.terminal_sessions.close_all()
         server.server_close()

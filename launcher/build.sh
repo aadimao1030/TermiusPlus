@@ -4,6 +4,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 project="$(dirname "$here")"
 dest="${1:-/Applications}"
+mkdir -p "$dest"
+project_xml="$(python3 -c 'import html,sys;print(html.escape(sys.argv[1]))' "$project")"
 build="$(mktemp -d)"
 trap 'rm -rf "$build"' EXIT
 app="$build/TermiusPlus.app"
@@ -26,7 +28,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>TermiusPlus</string>
   <key>CFBundleDisplayName</key><string>TermiusPlus</string>
-  <key>CFBundleIdentifier</key><string>local.lxd.termiusplus</string>
+  <key>CFBundleIdentifier</key><string>dev.termiusplus.desktop</string>
   <key>CFBundleExecutable</key><string>TermiusPlus</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -35,7 +37,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
-  <key>TermiusPlusProjectDir</key><string>$project</string>
+  <key>TermiusPlusProjectDir</key><string>$project_xml</string>
 </dict></plist>
 PLIST
 

@@ -4,7 +4,10 @@ import hashlib
 import json
 import shlex
 import subprocess
-import app
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from termiusplus import ssh as app
 
 CREATE_KEY = r'''
 import os,sys,subprocess

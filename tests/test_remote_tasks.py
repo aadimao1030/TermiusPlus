@@ -11,8 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app
-import remote_tasks
-import transfer_history
+from termiusplus import remote_tasks
+from termiusplus import transfer_history
 
 class RemoteTasksTests(unittest.TestCase):
     def test_real_tmux_transfer_survives_launcher_exit_both_directions(self):
@@ -36,7 +36,7 @@ class RemoteTasksTests(unittest.TestCase):
                 output=subprocess.check_output([sys.executable,'-c',script,str(peer),'identity'])
                 identity=json.loads(output)['identity']
                 config=dict(source=str(source),destination=str(target),pull=pull,target=dict(host='fixture',port=22),identity=identity,infoScript=script,items=['payload'],pack=False)
-                p=dict(op='start',id=identifier,config=config,worker=Path('remote_worker.py').read_text())
+                p=dict(op='start',id=identifier,config=config,worker=(Path(__file__).resolve().parents[1]/'termiusplus/remote_worker.py').read_text())
                 encoded=base64.b64encode(json.dumps(p).encode()).decode()
                 # This launching process exits immediately; no controller remains running.
                 result=subprocess.run([sys.executable,'-c',remote_tasks.BOOTSTRAP,encoded],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)

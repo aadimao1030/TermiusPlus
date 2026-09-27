@@ -1,6 +1,17 @@
+# Personal connection state, cached transfers and local artifacts
 .termiusplus-state/
+.local-artifacts/
 __pycache__/
-*.pyc
+*.py[cod]
 .DS_Store
 launcher/build/
 *.app/
+.env
+.env.*
+*.pem
+*.key
+# Temporary aliases kept only for already-running old processes
+/index.html
+/terminal.html
+/terminal_worker.py
+/remote_worker.py

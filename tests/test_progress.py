@@ -55,8 +55,8 @@ class ProgressTests(unittest.TestCase):
         self.assertNotEqual(result['state'],'completed')
 
     def test_frontend_legacy_running_job_and_current_snapshot(self):
-        html=(Path(__file__).resolve().parents[1]/'index.html').read_text()
-        code=html[html.index('function transferMetrics('):html.index('const logViews=')]
+        html=(Path(__file__).resolve().parents[1]/'web/scripts/files.js').read_text()
+        code=html[html.index('function transferMetrics('):html.index('const logViews ')]
         assertions="""
 const assert=require('node:assert/strict');
 const job={direction:'relay',state:'transferring',route:'下载 · jet',speed:0,progress:4.5,log:['01:17:20 下载: 1,069,744,128 9% 6.16MB/s 0:27:36']};

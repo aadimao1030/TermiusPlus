@@ -37,6 +37,22 @@ class HttpTests(unittest.TestCase):
         status = response.status; connection.close()
         return status, result
 
+    def test_file_actions_and_extracted_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'sample';path.write_text('keep')
+            payload=dict(side='local',root=directory,path=str(path),operation='rename',name='renamed')
+            status,_=self.request('/api/files',payload,headers={'Authorization':'Bearer wrong'})
+            self.assertEqual(status,403);self.assertTrue(path.exists())
+            status,result=self.request('/api/files',payload)
+            self.assertEqual(status,200,result);self.assertEqual(Path(result['path']).read_text(),'keep')
+            payload.update(path=result['path'],operation='trash')
+            status,result=self.request('/api/files',payload)
+            self.assertEqual(status,200,result);self.assertEqual(Path(result['path']).read_text(),'keep')
+        for endpoint,content in [('/','/static/scripts/files.js'),('/terminal','/static/scripts/terminal.js'),('/static/scripts/files.js','showFileMenu'),('/static/styles/files.css','.file-menu')]:
+            connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=10)
+            connection.request('GET',endpoint);response=connection.getresponse()
+            self.assertEqual(response.status,200);self.assertIn(content,response.read().decode());connection.close()
+
     def test_auth_and_origin_validation(self):
         status, _ = self.request('/api/status', headers={'Authorization': 'Bearer wrong'})
         self.assertEqual(status, 403)
@@ -48,14 +64,14 @@ class HttpTests(unittest.TestCase):
 
     def test_terminal_assets_and_authenticated_shell_endpoint(self):
         from unittest.mock import patch
-        import terminal_sessions
+        from termiusplus import terminal_sessions
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=10)
         connection.request('GET', '/terminal')
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
         self.assertIn(b'xterm.js', response.read())
         connection.close()
-        with patch('terminal_sessions.ssh_command', return_value=['/bin/sh', '-i']):
+        with patch('termiusplus.terminal_sessions.ssh_command', return_value=['/bin/sh', '-i']):
             status, result = self.request('/api/terminal/open', {'route':{'host':'fixture'},'cols':80,'rows':24})
             self.assertEqual(status, 200, result)
             identifier = result['id']
@@ -74,11 +90,11 @@ class HttpTests(unittest.TestCase):
                 terminal_sessions.SESSIONS.pop(identifier, None)
 
     def test_terminal_local_shell_endpoint(self):
-        import terminal_sessions
+        from termiusplus import terminal_sessions
         with tempfile.TemporaryDirectory() as directory:
             canonical = os.path.realpath(directory)
             command = [sys.executable, '-u', '-c', "import os;print('LOCAL_CWD',os.getcwd(),flush=True)"]
-            with patch('terminal_sessions.local_command', return_value=(command, canonical)):
+            with patch('termiusplus.terminal_sessions.local_command', return_value=(command, canonical)):
                 status, result = self.request('/api/terminal/open', {'local':True,'path':directory,'cols':80,'rows':24})
                 self.assertEqual(status, 200, result)
                 self.assertTrue(result['local'])

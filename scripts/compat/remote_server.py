@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
 
 token=os.environ.get('TERMIUSPLUS_REMOTE_TOKEN')

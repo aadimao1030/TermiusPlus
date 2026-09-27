@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TermiusPlus · Files</title>
+    <link rel="stylesheet" href="/static/styles/files.css" />
+  </head>
+  <body>
+    <svg style="display: none" aria-hidden="true">
+      <defs>
+        <symbol id="i-folder" viewBox="0 0 24 24">
+          <path d="M3 7V5h6l2 2h10v12H3Z" />
+        </symbol>
+        <symbol id="i-file" viewBox="0 0 24 24">
+          <path d="M6 3h8l4 4v14H6Z" />
+          <path d="M14 3v5h4M9 12h6M9 16h6" />
+        </symbol>
+        <symbol id="i-server" viewBox="0 0 24 24">
+          <rect x="4" y="3" width="16" height="7" rx="2" />
+          <rect x="4" y="14" width="16" height="7" rx="2" />
+          <path d="M8 6.5h.01M8 17.5h.01M14 6.5h3M14 17.5h3" />
+        </symbol>
+        <symbol id="i-transfer" viewBox="0 0 24 24">
+          <path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4" />
+        </symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24">
+          <path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5" />
+        </symbol>
+        <symbol id="i-download" viewBox="0 0 24 24">
+          <path d="M12 3v13m-5-5 5 5 5-5M4 16v5h16v-5" />
+        </symbol>
+        <symbol id="i-archive" viewBox="0 0 24 24">
+          <path d="M4 8h16v13H4ZM3 3h18v5H3ZM10 12h4" />
+        </symbol>
+        <symbol id="i-computer" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M9 21h6M12 17v4" />
+        </symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24">
+          <path d="M12 5v14M5 12h14" />
+        </symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24">
+          <path d="m9 5 7 7-7 7" />
+        </symbol>
+        <symbol id="i-down" viewBox="0 0 24 24">
+          <path d="m5 9 7 7 7-7" />
+        </symbol>
+        <symbol id="i-up" viewBox="0 0 24 24">
+          <path d="m5 15 7-7 7 7" />
+        </symbol>
+        <symbol id="i-refresh" viewBox="0 0 24 24">
+          <path
+            d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 13-3l2 3M4 16l2 3a8 8 0 0 0 13-3"
+          />
+        </symbol>
+        <symbol id="i-close" viewBox="0 0 24 24">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </symbol>
+        <symbol id="i-check" viewBox="0 0 24 24">
+          <path d="m5 12 4 4L19 6" />
+        </symbol>
+        <symbol id="i-settings" viewBox="0 0 24 24">
+          <path d="M4 6h16M4 12h16M4 18h16" />
+          <circle cx="9" cy="6" r="2" />
+          <circle cx="16" cy="12" r="2" />
+          <circle cx="8" cy="18" r="2" />
+        </symbol>
+        <symbol id="i-terminal" viewBox="0 0 24 24">
+          <path d="m4 6 6 6-6 6M13 18h7" />
+        </symbol>
+        <symbol id="i-eye" viewBox="0 0 24 24">
+          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+          <circle cx="12" cy="12" r="3" />
+        </symbol>
+      </defs>
+    </svg>
+    <div class="app">
+      <main class="workspace">
+        <header class="topbar">
+          <div class="title">›_ <span>TermiusPlus</span></div>
+          <nav class="view-nav" aria-label="工作区">
+            <button class="active" id="filesNav">文件传输</button
+            ><button id="terminalNav">终端</button>
+          </nav>
+          <div class="file-tools" id="fileTools">
+            <div class="controls">
+              <button class="control" id="upload">
+                <svg><use href="#i-upload" /></svg>上传</button
+              ><button class="control" id="download">
+                <svg><use href="#i-download" /></svg>下载</button
+              ><button
+                class="control"
+                id="preview"
+                title="预览选中文件（Alt+P）"
+              >
+                <svg><use href="#i-eye" /></svg>预览</button
+              ><button class="control" id="pack">
+                <svg><use href="#i-archive" /></svg>打包<kbd>⌘ ⇧ P</kbd>
+              </button>
+            </div>
+            <label class="checkbox"
+              ><input id="packFirst" type="checkbox" />先打包再传输</label
+            >
+          </div>
+          <div class="top-actions">
+            <button id="settings" aria-label="传输设置" title="传输设置">
+              <svg><use href="#i-settings" /></svg></button
+            ><button id="addRoute" title="新建连接">
+              <svg><use href="#i-plus" /></svg>新建连接
+            </button>
+          </div>
+        </header>
+        <div id="fileWorkspace" class="file-workspace">
+          <div class="content">
+            <div class="panes">
+              <section
+                class="pane focused"
+                id="localPane"
+                aria-label="左栏文件面板"
+              >
+                <div class="pane-head">
+                  <button
+                    class="pane-name location-button"
+                    id="localLocation"
+                    aria-label="选择左栏位置"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                  >
+                    <svg><use href="#i-computer" /></svg><strong>本地</strong
+                    ><span id="localLocationName">这台电脑</span
+                    ><svg class="location-chevron"><use href="#i-down" /></svg>
+                  </button>
+                  <div class="pane-actions">
+                    <button
+                      id="localTerminal"
+                      aria-label="打开左栏本地终端"
+                      title="在此目录打开本地终端"
+                    >
+                      <svg><use href="#i-terminal" /></svg></button
+                    ><button
+                      id="localHidden"
+                      aria-label="左栏显示隐藏文件"
+                      aria-pressed="false"
+                      title="显示隐藏文件"
+                    >
+                      <svg><use href="#i-eye" /></svg></button
+                    ><button
+                      id="localRefresh"
+                      aria-label="刷新左栏目录"
+                      title="刷新当前目录"
+                    >
+                      <svg><use href="#i-refresh" /></svg>
+                    </button>
+                  </div>
+                </div>
+                <div
+                  class="location-menu"
+                  id="localMenu"
+                  role="menu"
+                  aria-label="左栏位置菜单"
+                  hidden
+                ></div>
+                <div class="pathbar">
+                  <button id="localUp" aria-label="左栏上一级">
+                    <svg><use href="#i-up" /></svg></button
+                  ><input
+                    id="localPath"
+                    aria-label="左栏目录路径"
+                    placeholder="/Users/你/Downloads"
+                  /><button
+                    id="loadLocal"
+                    aria-label="打开左栏目录"
+                    title="打开目录"
+                  >
+                    <svg><use href="#i-chevron" /></svg>
+                  </button>
+                </div>
+                <div class="column-head">
+                  <span>名称</span><span class="column-type">类型</span
+                  ><span class="column-size">大小</span>
+                </div>
+                <div
+                  class="tree"
+                  id="localTree"
+                  tabindex="0"
+                  role="region"
+                  aria-label="左栏文件列表"
+                ></div>
+                <footer class="pane-foot">
+                  <span id="localCount">准备读取目录</span
+                  ><span id="localSelected">拖出以上传</span>
+                </footer>
+                <div
+                  class="panel-resizer"
+                  id="localResizer"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整左栏文件区高度"
+                  tabindex="0"
+                  title="拖动调整高度"
+                ></div>
+              </section>
+              <div
+                class="column-resizer"
+                id="columnResizer"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整左右文件栏宽度"
+                tabindex="0"
+              ></div>
+              <section class="pane" id="remotePane" aria-label="右栏文件面板">
+                <div class="pane-head">
+                  <button
+                    class="pane-name location-button"
+                    id="remoteLocation"
+                    aria-label="选择右栏位置"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                  >
+                    <svg><use href="#i-server" /></svg><strong>远程</strong
+                    ><span id="remoteLocationName">选择连接</span
+                    ><svg class="location-chevron"><use href="#i-down" /></svg>
+                  </button>
+                  <div class="pane-actions">
+                    <button
+                      id="remoteTerminal"
+                      aria-label="打开右栏远程终端"
+                      title="在此目录打开远程终端"
+                    >
+                      <svg><use href="#i-terminal" /></svg></button
+                    ><button
+                      id="remoteHidden"
+                      aria-label="右栏显示隐藏文件"
+                      aria-pressed="false"
+                      title="显示隐藏文件"
+                    >
+                      <svg><use href="#i-eye" /></svg></button
+                    ><button
+                      id="remoteRefresh"
+                      aria-label="刷新右栏目录"
+                      title="刷新当前目录"
+                    >
+                      <svg><use href="#i-refresh" /></svg>
+                    </button>
+                  </div>
+                </div>
+                <div
+                  class="location-menu"
+                  id="remoteMenu"
+                  role="menu"
+                  aria-label="右栏位置菜单"
+                  hidden
+                ></div>
+                <div class="pathbar">
+                  <button id="remoteUp" aria-label="右栏上一级">
+                    <svg><use href="#i-up" /></svg></button
+                  ><input
+                    id="remotePath"
+                    aria-label="右栏目录路径"
+                    value="~"
+                  /><button
+                    id="loadRemote"
+                    aria-label="打开右栏目录"
+                    title="连接目录"
+                  >
+                    <svg><use href="#i-chevron" /></svg>
+                  </button>
+                </div>
+                <div class="column-head">
+                  <span>名称</span><span class="column-type">类型</span
+                  ><span class="column-size">大小</span>
+                </div>
+                <div
+                  class="tree"
+                  id="remoteTree"
+                  tabindex="0"
+                  role="region"
+                  aria-label="右栏文件列表"
+                ></div>
+                <footer class="pane-foot">
+                  <span id="remoteCount">尚未连接</span
+                  ><span id="remoteSelected">拖入以上传</span>
+                </footer>
+                <div
+                  class="panel-resizer"
+                  id="remoteResizer"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整右栏文件区高度"
+                  tabindex="0"
+                  title="拖动调整高度"
+                ></div>
+              </section>
+            </div>
+            <section class="queue">
+              <div class="queue-head">
+                <strong>传输队列 <span id="jobCount">0</span></strong>
+              </div>
+              <div id="jobs" tabindex="0" role="region" aria-label="传输记录">
+                <div class="queue-empty">
+                  <svg><use href="#i-transfer" /></svg>传输任务会显示在这里
+                </div>
+              </div>
+              <div
+                class="panel-resizer"
+                id="queueResizer"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="调整传输队列高度"
+                tabindex="0"
+                title="拖动调整高度"
+              ></div>
+            </section>
+          </div>
+          <footer class="statusbar">
+            <span class="indicator" id="status">正在检查环境…</span
+            ><span>打包 ⌘/Ctrl ⇧ P · 传输 ⌘/Ctrl ↵ · 刷新 ⌘/Ctrl R</span>
+          </footer>
+        </div>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <dialog id="routeDialog">
+      <form id="routeForm">
+        <div class="dialog-head">
+          <span id="routeDialogTitle">新建连接</span
+          ><button
+            type="button"
+            data-close="routeDialog"
+            aria-label="关闭连接弹窗"
+          >
+            <svg><use href="#i-close" /></svg>
+          </button>
+        </div>
+        <div class="dialog-body">
+          <p>添加直连或跳板线路。同一服务器的多条线路可自动择优续传。</p>
+          <label for="name">连接名称</label
+          ><input id="name" placeholder="例如：开发服务器 · 直连" />
+          <div class="dialog-row">
+            <div>
+              <label for="host">SSH 别名或 user@host</label
+              ><input id="host" required placeholder="user@192.0.2.10" />
+            </div>
+            <div>
+              <label for="port">端口</label
+              ><input id="port" type="number" min="1" max="65535" value="22" />
+            </div>
+          </div>
+          <label for="jump">跳板（可选）</label
+          ><input id="jump" placeholder="user@bastion:22" /><label for="key"
+            >密钥路径（可选）</label
+          ><input id="key" placeholder="~/.ssh/id_ed25519" />
+          <p style="margin-top: 12px; margin-bottom: 0">
+            使用 SSH 密钥或 agent。首次连接请在终端确认服务器指纹；远程需要
+            python3 和 rsync 3.x。
+          </p>
+        </div>
+        <div class="dialog-footer">
+          <button type="button" id="deleteRoute" hidden>删除连接</button
+          ><button type="button" data-close="routeDialog">取消</button
+          ><button type="submit" class="primary">保存连接</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="settingsDialog">
+      <div class="dialog-head">
+        传输设置<button data-close="settingsDialog" aria-label="关闭设置">
+          <svg><use href="#i-close" /></svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <label class="checkbox" style="display: flex"
+          ><input
+            id="auto"
+            type="checkbox"
+            checked
+            style="width: auto"
+          />自动择优与故障切换</label
+        ><label for="threshold">低速阈值（MiB/s）</label
+        ><input
+          id="threshold"
+          type="number"
+          min="0.01"
+          max="10000"
+          step="0.1"
+          value="1"
+        />
+        <p style="margin-top: 12px">
+          持续低速约 20 秒才比较线路，切换间隔至少 60 秒。测速是 4 MiB
+          下载样本，上传可能不同。切换需要短暂重连后续传。
+        </p>
+      </div>
+      <div class="dialog-footer">
+        <button class="primary" data-close="settingsDialog">完成</button>
+      </div>
+    </dialog>
+    <dialog id="transferDialog">
+      <div class="dialog-head">
+        <span id="transferTitle">确认传输</span
+        ><button data-close="transferDialog" aria-label="关闭传输确认">
+          <svg><use href="#i-close" /></svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="transfer-summary" id="transferSummary"></div>
+        <p>同名文件可能被更新；目标多余文件会保留。</p>
+        <label class="checkbox" style="display: flex"
+          ><input
+            id="confirmPack"
+            type="checkbox"
+            style="width: auto"
+          />先打包为 .tar.gz 再传输</label
+        >
+        <div id="remoteTaskOptions" hidden>
+          <label for="remoteMode">传输方式</label
+          ><select id="remoteMode">
+            <option value="remote">远程会话（Mac 断联后继续）</option>
+            <option value="relay">本机中转（Mac 必须在线）</option>
+          </select>
+          <div id="directSettings">
+            <label for="remoteExecutor">会话运行在</label
+            ><select id="remoteExecutor">
+              <option value="destination">目标服务器 B（从 A 拉取）</option>
+              <option value="source">源服务器 A（推送到 B）</option></select
+            ><label id="remotePeerLabel" for="remotePeer"
+              >B 登录 A 的 SSH 地址</label
+            ><input
+              id="remotePeer"
+              placeholder="user@地址，或执行端的 SSH 别名"
+            /><label for="remotePeerPort">SSH 端口</label
+            ><input
+              id="remotePeerPort"
+              type="number"
+              min="1"
+              max="65535"
+              value="22"
+            /><label for="remotePeerKey">执行端上的密钥路径（可选）</label
+            ><input id="remotePeerKey" placeholder="~/.ssh/专用密钥" />
+            <p>
+              使用执行端自身的 SSH 密钥，不复制 Mac
+              私钥、不依赖密钥转发。任务和日志保存在远程；两端须有 rsync
+              3.x，执行端须有 tmux。
+            </p>
+          </div>
+        </div>
+        <p class="progress-note" id="stageNote" style="margin-top: 12px"></p>
+      </div>
+      <div class="dialog-footer">
+        <button data-close="transferDialog">取消</button
+        ><button class="primary" id="confirmTransfer">开始传输</button>
+      </div>
+    </dialog>
+    <dialog id="previewDialog" aria-labelledby="previewTitle">
+      <div class="dialog-head">
+        <span class="preview-name" id="previewTitle">文件预览</span
+        ><button data-close="previewDialog" aria-label="关闭文件预览">
+          <svg><use href="#i-close" /></svg>
+        </button>
+      </div>
+      <div class="preview-meta" id="previewMeta"></div>
+      <div class="preview-content" id="previewContent"></div>
+      <div class="preview-hint" id="previewHint">只读预览</div>
+    </dialog>
+    <div
+      id="fileMenu"
+      class="file-menu"
+      role="menu"
+      aria-label="文件操作"
+      hidden
+    ></div>
+    <dialog id="fileActionDialog" aria-labelledby="fileActionTitle">
+      <form id="fileActionForm">
+        <div class="dialog-head">
+          <span id="fileActionTitle"></span
+          ><button
+            type="button"
+            data-close="fileActionDialog"
+            aria-label="关闭文件操作"
+          >
+            ×
+          </button>
+        </div>
+        <div class="dialog-body">
+          <p id="fileActionPath"></p>
+          <div id="renameField">
+            <label for="newFilename">新名称</label
+            ><input id="newFilename" required />
+          </div>
+          <p id="deleteNote" hidden>
+            将移入项目所在目录的 .termiusplus-trash
+            回收文件夹，不会永久删除。软链接只移动链接本身，不影响目标。
+          </p>
+        </div>
+        <div class="dialog-footer">
+          <button type="button" data-close="fileActionDialog">取消</button
+          ><button type="submit" class="primary" id="confirmFileAction">
+            确认
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <script src="/static/scripts/files.js"></script>
+  </body>
+</html>

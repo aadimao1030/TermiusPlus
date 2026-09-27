@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TermiusPlus · Terminal</title>
+    <link rel="stylesheet" href="/static/vendor/xterm/xterm.css" />
+    <link rel="stylesheet" href="/static/styles/terminal.css" />
+  </head>
+  <body>
+    <header>
+      <div class="title">›_ <span>TermiusPlus</span></div>
+      <nav class="view-nav" aria-label="工作区">
+        <button id="filesLink">文件传输</button
+        ><button id="terminalSelf" class="active">终端</button>
+      </nav>
+    </header>
+    <nav class="session-bar" aria-label="终端会话">
+      <div id="sessionTabs" class="session-tabs" role="tablist"></div>
+      <button
+        id="newSession"
+        class="add-session"
+        aria-label="新建会话"
+        title="新建会话"
+        aria-expanded="false"
+        aria-controls="sessionPicker"
+      >
+        ＋
+      </button>
+    </nav>
+    <div
+      id="sessionPicker"
+      class="session-picker"
+      role="dialog"
+      aria-label="新建会话"
+      hidden
+    >
+      <div class="picker-label">连接到</div>
+      <div id="pickerRoutes" class="picker-routes"></div>
+    </div>
+    <main class="terminal-wrap">
+      <div id="emptyTerminal" class="empty-terminal">
+        <strong>同时连接，随时切换</strong
+        ><span>点击标签旁的 ＋，打开本地终端或选择一台服务器。</span>
+      </div>
+      <div id="terminal" style="height: 100%; width: 100%" hidden></div>
+    </main>
+    <footer>
+      <span id="state" class="status" role="status"
+        >点击标签旁的 ＋ 新建会话</span
+      >
+    </footer>
+    <script src="/static/vendor/xterm/xterm.js"></script>
+    <script src="/static/vendor/addon-fit/addon-fit.js"></script>
+    <script src="/static/scripts/terminal.js"></script>
+  </body>
+</html>

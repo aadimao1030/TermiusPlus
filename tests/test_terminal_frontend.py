@@ -125,8 +125,7 @@ JET={'name':'jet','host':'jet.example','port':22,'jump':'','key':''}
 
 class TerminalFrontendTests(unittest.TestCase):
     def run_frontend(self, config, assertions):
-        html=(ROOT/'terminal.html').read_text()
-        frontend=html[html.index("'use strict';"):html.rindex('</script>')]
+        frontend=(ROOT/'web/scripts/terminal.js').read_text()
         config=dict(config,routes=[dict(JET)],filesUrl='http://127.0.0.1:19387/#TOKEN')
         code=DOM.replace('__CONFIG__',json.dumps(json.dumps(config)))+frontend+assertions
         result=subprocess.run(['node','-e',code],capture_output=True,text=True)
@@ -140,17 +139,16 @@ class TerminalFrontendTests(unittest.TestCase):
         self.run_frontend(dict(local=False,route=None,path='',localPath='/tmp/local dir',autoConnect=False),PICKER_ONLY_ASSERTIONS)
 
     def test_file_pane_terminal_buttons_map_to_local_or_the_pane_connection(self):
-        html=(ROOT/'index.html').read_text()
-        head=html[html.index(' closeMenus();const p=panes[side]'):]
-        head=head[:head.index('autoConnect:!!(remote||local)};')+len('autoConnect:!!(remote||local)};')]
+        html=(ROOT/'web/scripts/files.js').read_text()
+        head=html[html.index('function terminalConfig('):html.index('async function openTerminal(')]
         jet={'name':'jet','host':'jet.example','port':22,'jump':'','key':''}
         code=r"""
 const assert=require('node:assert/strict');
 const routes=[__JET__],jet=routes[0],localHome='/Users/me',appOrigin='http://127.0.0.1:19387';
 function closeMenus(){}
 function token(){return 'TOKEN'}
-function build(side,panes){__HEAD__
- return config}
+__HEAD__
+function build(side,panes){return terminalConfig(side,panes)}
 const connected={kind:'remote',root:'/srv/app',connection:routes[0]};
 assert.deepEqual(build('local',{local:{kind:'local',root:'/Users/me/Project'},remote:connected}),
  {route:undefined,local:true,routes,path:'/Users/me/Project',localPath:'/Users/me/Project',filesUrl:'http://127.0.0.1:19387/#TOKEN',autoConnect:true});
@@ -159,6 +157,7 @@ assert.deepEqual(build('remote',{local:{kind:'local',root:'/Users/me/Project'},r
 assert.deepEqual(build('remote',{local:{kind:'local',root:''},remote:{kind:'remote',root:'',connection:null}}),
  {route:undefined,local:false,routes,path:'',localPath:'/Users/me',filesUrl:'http://127.0.0.1:19387/#TOKEN',autoConnect:false});
 assert.deepEqual(build('local',{local:{kind:'local',root:''},remote:{kind:'remote',root:'',connection:null}}).path,'/Users/me');
+assert.equal(build('remote',{local:connected,remote:{kind:'local',root:'/tmp/right-local'}}).localPath,'/tmp/right-local');
 console.log('FRONTEND_OK');
 """.replace('__HEAD__',head).replace('__JET__',json.dumps(jet))
         result=subprocess.run(['node','-e',code],capture_output=True,text=True)
