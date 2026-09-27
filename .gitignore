@@ -1,0 +1,6 @@
+.termiusplus-state/
+__pycache__/
+*.pyc
+.DS_Store
+launcher/build/
+*.app/
