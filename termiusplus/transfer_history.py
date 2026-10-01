@@ -55,6 +55,24 @@ def save(path, jobs, lock):
         os.replace(temporary, path)
 
 
+def forget(path, identifier):
+    """Remove a legacy controller record without touching transfer data."""
+    path = Path(path)
+    if not path.exists():
+        return
+    records = json.loads(path.read_text())
+    remaining = [r for r in records if r['snapshot']['id'] != identifier]
+    if len(remaining) == len(records):
+        return
+    temporary = path.with_suffix('.tmp')
+    with temporary.open('w') as output:
+        os.chmod(temporary, 0o600)
+        json.dump(remaining, output, ensure_ascii=False)
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, path)
+
+
 def restore(path, job_class, relay_class, remote_class=None):
     path = Path(path)
     if not path.exists():

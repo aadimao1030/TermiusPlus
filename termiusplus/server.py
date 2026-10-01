@@ -25,7 +25,7 @@ from . import remote_tasks
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .filesystem import file_preview, file_operation, local_info
-from .ssh import validate_route, ssh_args
+from .ssh import validate_route, ssh_args, ssh_env
 
 BASE = Path(__file__).resolve().parent.parent
 PACKAGE = Path(__file__).resolve().parent
@@ -83,7 +83,10 @@ def remote_info(route, path, identity_only=False):
     command = 'python3 -c ' + shlex.quote(REMOTE_SCRIPT) + ' ' + shlex.quote(path)
     if identity_only:
         command += ' identity'
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    try:
+        result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=60, env=ssh_env(route))
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('SSH 连接或远程目录读取超时（60 秒）。请检查远程登录是否需要额外确认，或稍后重试。') from exc
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程目录读取失败')
     data = json.loads(result.stdout)
@@ -96,7 +99,7 @@ REMOTE_PREVIEW_SCRIPT = inspect.getsource(file_preview) + "\nimport json,sys\npr
 
 def remote_preview(route, path):
     command = 'python3 -c ' + shlex.quote(REMOTE_PREVIEW_SCRIPT) + ' ' + shlex.quote(path)
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25, env=ssh_env(route))
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程文件预览失败')
     return json.loads(result.stdout)
@@ -115,7 +118,7 @@ def file_action(data):
         raise ValueError('文件位置不正确')
     route = validate_route(data['route'])
     command = 'python3 -c ' + shlex.quote(REMOTE_FILE_OPERATION_SCRIPT) + ' ' + shlex.quote(json.dumps(values))
-    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25)
+    result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25, env=ssh_env(route))
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程文件操作失败')
     return json.loads(result.stdout)
@@ -135,7 +138,7 @@ def rsync_binary():
 def measure(route, cancel=None):
     # An explicit SSH download probe, not ping latency. Upload performance may differ.
     command = "python3 -c 'import sys;sys.stdout.buffer.write(bytes(4*1024*1024))'"
-    process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, env=ssh_env(route))
     timer = threading.Timer(12, lambda: stop_process(process))
     timer.start()
     started = time.monotonic()
@@ -446,7 +449,7 @@ class Job:
     def pack_remote(self, route, root, items):
         name = archive_name(validate_items(items))
         command = 'python3 -c ' + shlex.quote(REMOTE_ARCHIVE_SCRIPT) + ' ' + shlex.quote(root) + ' ' + shlex.quote(json.dumps(items)) + ' ' + shlex.quote(name)
-        self.process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, env=ssh_env(route))
         output, error = self.process.communicate()
         if self.process.returncode:
             raise ValueError(error.decode(errors='replace')[-1500:] or '远程打包失败')
@@ -589,7 +592,7 @@ class Job:
                 self.eta = ''
                 self.last_progress = time.monotonic()
                 self.event('使用 ' + self.route + ' 开始/续传')
-                self.process = subprocess.Popen(self.command(binary, current, canonical, local), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=dict(os.environ, LC_ALL='C'))
+                self.process = subprocess.Popen(self.command(binary, current, canonical, local), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=ssh_env(current, {'LC_ALL': 'C'}) or dict(os.environ, LC_ALL='C'))
                 reader = threading.Thread(target=self.read_output, args=(self.process,), daemon=True)
                 reader.start()
                 replacement = None
@@ -996,6 +999,22 @@ class Handler(BaseHTTPRequestHandler):
                     JOBS[job.id] = job
                 launch(job)
                 result = {'id': job.id}
+            elif self.path == '/api/delete-record':
+                with LOCK:
+                    identifier = data.get('id')
+                    job = JOBS.get(identifier)
+                    if not job:
+                        raise ValueError('此记录已不存在')
+                    if job.state not in transfer_history.TERMINAL:
+                        raise ValueError('任务仍在运行，请先取消或等待完成')
+                    transfer_history.forget(HISTORY_PATH.parent / 'remote-controller' / 'transfers.json', identifier)
+                    del JOBS[identifier]
+                    try:
+                        checkpoint()
+                    except Exception:
+                        JOBS[identifier] = job
+                        raise
+                result = {'ok': True}
             elif self.path == '/api/cancel':
                 job = JOBS[data['id']]
                 if isinstance(job,RemoteJob):

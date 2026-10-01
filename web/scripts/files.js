@@ -20,6 +20,38 @@ function icon(name, cls = "") {
   if (cls) svg.setAttribute("class", cls);
   return svg;
 }
+const routePasswords = new Map();
+function routePasswordKey(route) {
+  return JSON.stringify([
+    route.host,
+    Number(route.port || 22),
+    route.jump || "",
+    route.key || "",
+  ]);
+}
+function rememberRoute(route) {
+  if (typeof route.password === "string")
+    routePasswords.set(routePasswordKey(route), route.password);
+  const { password, ...saved } = route;
+  return saved;
+}
+function withRoutePasswords(value) {
+  if (Array.isArray(value)) return value.map(withRoutePasswords);
+  if (value && typeof value === "object") {
+    const copy = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [
+        key,
+        withRoutePasswords(child),
+      ]),
+    );
+    if (typeof copy.host === "string") {
+      const password = routePasswords.get(routePasswordKey(copy));
+      if (password !== undefined) copy.password = password;
+    }
+    return copy;
+  }
+  return value;
+}
 let routes = [],
   preferences = {};
 try {
@@ -31,16 +63,17 @@ try {
 } catch {}
 try {
   for (const route of JSON.parse(window.frameElement?.dataset.routes || "[]")) {
+    const clean = rememberRoute(route);
     if (
       !routes.some(
         (r) =>
-          r.host === route.host &&
-          Number(r.port || 22) === Number(route.port || 22) &&
-          (r.jump || "") === (route.jump || "") &&
-          (r.key || "") === (route.key || ""),
+          r.host === clean.host &&
+          Number(r.port || 22) === Number(clean.port || 22) &&
+          (r.jump || "") === (clean.jump || "") &&
+          (r.key || "") === (clean.key || ""),
       )
     )
-      routes.push(route);
+      routes.push(clean);
   }
 } catch {}
 let terminalSupported = false,
@@ -122,7 +155,7 @@ async function api(path, data = {}) {
       "Content-Type": "application/json",
       Authorization: "Bearer " + token(),
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify(withRoutePasswords(data)),
   });
   const result = await response.json();
   if (!response.ok) throw Error(result.error || "请求失败");
@@ -317,7 +350,10 @@ async function selectEndpoint(side, kind, connection) {
 function saveRoutes() {
   localStorage.setItem("termiusplus.routes", JSON.stringify(routes));
   renderRoutes();
-  const message = { type: "termiusplus:update-routes", config: { routes } };
+  const message = {
+    type: "termiusplus:update-routes",
+    config: { routes: withRoutePasswords(routes) },
+  };
   if (terminalFrame)
     terminalFrame.contentWindow.postMessage(message, appOrigin);
   if (window.frameElement?.dataset.hostView === "terminal")
@@ -344,9 +380,9 @@ function terminalConfig(side, workspace = panes) {
     remote = p.kind === "remote" && p.connection,
     local = p.kind === "local";
   return {
-    route: remote ? p.connection : undefined,
+    route: remote ? withRoutePasswords(p.connection) : undefined,
     local,
-    routes,
+    routes: withRoutePasswords(routes),
     path: p.root || (local ? localHome : ""),
     localPath:
       Object.values(workspace).find((p) => p.kind === "local")?.root ||
@@ -429,16 +465,23 @@ document
   .forEach(
     (button) => (button.onclick = () => $(button.dataset.close).close()),
   );
-function openRouteEditor(route = null, side = focused) {
+function openRouteEditor(route = null, side = focused, authHint = "") {
+  if ($("routeDialog").open) return;
   closeMenus();
   editingRoute = route;
   routeDialogTarget = side;
   $("routeForm").reset();
   for (const field of ["name", "host", "port", "jump", "key"])
     $(field).value = route?.[field] ?? (field === "port" ? 22 : "");
+  $("password").value = route
+    ? routePasswords.get(routePasswordKey(route)) || ""
+    : "";
+  $("routeAuthHint").textContent = authHint;
+  $("routeAuthHint").hidden = !authHint;
   $("routeDialogTitle").textContent = route ? "编辑连接" : "新建连接";
   $("deleteRoute").hidden = !route;
   $("routeDialog").showModal();
+  if (authHint) $("password").focus();
 }
 function replaceRoute(old, route) {
   for (const side of sides) {
@@ -473,6 +516,7 @@ function replaceRoute(old, route) {
 $("deleteRoute").onclick = () => {
   if (!editingRoute) return;
   const old = editingRoute;
+  routePasswords.delete(routePasswordKey(old));
   routes = routes.filter((r) => r !== old);
   replaceRoute(old, null);
   $("routeDialog").close();
@@ -497,6 +541,10 @@ $("routeForm").onsubmit = async (event) => {
     return;
   }
   const old = editingRoute;
+  const password = $("password").value;
+  if (old && routePasswordKey(old) !== routePasswordKey(route))
+    routePasswords.delete(routePasswordKey(old));
+  routePasswords.set(routePasswordKey(route), password);
   if (old) {
     const index = routes.indexOf(old);
     if (index < 0) return;
@@ -525,6 +573,46 @@ function formatSize(value) {
   if (value < 1048576) return (value / 1024).toFixed(1) + " KB";
   if (value < 1073741824) return (value / 1048576).toFixed(1) + " MB";
   return (value / 1073741824).toFixed(1) + " GB";
+}
+const folderClickDelay = 520;
+let pendingFolderClick = null;
+function cancelFolderClick() {
+  if (pendingFolderClick) clearTimeout(pendingFolderClick.timer);
+  pendingFolderClick = null;
+}
+function handleFolderClick(row, onDouble, onTriple) {
+  const now = performance.now();
+  const previous = pendingFolderClick;
+  if (!previous || previous.row !== row || now - previous.time > folderClickDelay) {
+    cancelFolderClick();
+    pendingFolderClick = {
+      row,
+      count: 1,
+      time: now,
+      timer: setTimeout(() => {
+        if (pendingFolderClick?.row === row && pendingFolderClick.count === 1)
+          pendingFolderClick = null;
+      }, folderClickDelay),
+    };
+    return;
+  }
+  clearTimeout(previous.timer);
+  if (previous.count === 1) {
+    pendingFolderClick = {
+      row,
+      count: 2,
+      time: now,
+      timer: setTimeout(() => {
+        if (pendingFolderClick?.row !== row || pendingFolderClick.count !== 2)
+          return;
+        pendingFolderClick = null;
+        if (row.isConnected) onDouble();
+      }, folderClickDelay),
+    };
+  } else {
+    pendingFolderClick = null;
+    if (row.isConnected) onTriple();
+  }
 }
 function relative(root, path) {
   if (!path.startsWith(root === "/" ? "/" : root + "/"))
@@ -630,14 +718,28 @@ function drawEntries(container, list, side) {
     wrap.append(row);
     container.append(wrap);
     row.onclick = (event) => {
-      if (event.detail <= 1)
-        select(side, entry, event.metaKey || event.ctrlKey);
-      if (entry.directory && event.detail === 2) action(null, toggleFolder);
-      if (entry.directory && event.detail === 3)
-        action(null, () => load(side, entry.path));
+      if (event.button !== 0) return;
+      if (entry.directory) {
+        if (event.detail <= 1)
+          select(side, entry, event.metaKey || event.ctrlKey);
+        handleFolderClick(
+          row,
+          () => action(null, toggleFolder),
+          () => action(null, () => load(side, entry.path)),
+        );
+      } else {
+        cancelFolderClick();
+        if (event.detail <= 1)
+          select(side, entry, event.metaKey || event.ctrlKey);
+      }
+    };
+    row.onselectstart = (event) => event.preventDefault();
+    row.onmousedown = (event) => {
+      if (event.button === 0 && event.detail > 1) event.preventDefault();
     };
     row.oncontextmenu = (event) => {
       event.preventDefault();
+      cancelFolderClick();
       showFileMenu(event, side, entry, toggleFolder);
     };
     row.onkeydown = (event) => {
@@ -654,6 +756,7 @@ function drawEntries(container, list, side) {
       }
     };
     row.ondblclick = (event) => {
+      event.preventDefault();
       event.stopPropagation();
       if (!entry.directory) action(null, () => previewFile(side, entry));
     };
@@ -746,6 +849,10 @@ function showFileMenu(event, side, entry, toggleFolder) {
     add("展开 / 收起", toggleFolder);
     add("进入文件夹", () => load(side, entry.path));
   } else add("预览", () => previewFile(side, entry));
+  add("复制路径", async () => {
+    await navigator.clipboard.writeText(entry.path);
+    notice("已复制路径");
+  });
   add("打包", packSelection);
   add("重命名", () => openFileAction(side, entry, "rename"));
   add("删除…", () => openFileAction(side, entry, "trash"), true);
@@ -837,10 +944,37 @@ async function load(side, path, background = false) {
   const p = panes[side],
     generation = ++p.generation,
     key = endpointKey(side);
-  const info = await browse(
-    side,
-    path === undefined ? $(side + "Path").value : path,
-  );
+  let info;
+  try {
+    info = await browse(
+      side,
+      path === undefined ? $(side + "Path").value : path,
+    );
+  } catch (error) {
+    if (generation !== p.generation || key !== endpointKey(side)) return;
+    if (
+      p.kind === "remote" &&
+      p.connection &&
+      (/Permission denied \([^)]*password[^)]*\)/i.test(error.message) ||
+        /SSH 连接或远程目录读取超时/i.test(error.message))
+    ) {
+      const hasPassword = Boolean(
+        routePasswords.get(routePasswordKey(p.connection)),
+      );
+      const timedOut = /超时/i.test(error.message);
+      openRouteEditor(
+        p.connection,
+        side,
+        timedOut
+          ? "SSH 登录超时。请检查网络和服务器登录提示；如使用密码，请重新输入并保存后重试。"
+          : hasPassword
+            ? "服务器拒绝了本次 SSH 认证。请核对用户名和密码，或改用已登记的 SSH 密钥。"
+            : "此服务器要求 SSH 密码。请在这里输入密码并保存，工具会立即重试连接。",
+      );
+      return;
+    }
+    throw error;
+  }
   if (generation !== p.generation || key !== endpointKey(side)) return;
   $(side + "Path").value = info.path;
   p.root = info.path;
@@ -971,11 +1105,19 @@ function showTransfer(options, names, external = false) {
     options.direction === "relay" || options.direction === "remote";
   $("remoteTaskOptions").hidden = !between;
   if (between) {
+    const passwordLogin = [options.source, options.destination].some(
+      (endpoint) =>
+        endpoint?.routes?.some((route) =>
+          routePasswords.get(routePasswordKey(route)),
+        ),
+    );
     $("remoteMode").value = options._resumeId
       ? "relay"
       : options.direction === "remote"
         ? "remote"
-        : "remote";
+        : passwordLogin
+          ? "relay"
+          : "remote";
     $("remoteMode").disabled = !!options._resumeId;
     $("remoteExecutor").value = options.executor || "destination";
     updateRemoteSettings();
@@ -1476,14 +1618,12 @@ const logViews = new Map();
 function renderJobs(jobs) {
   if ($("fileWorkspace").hidden) return;
   const queueScroll = $("jobs").scrollTop;
-  document
-    .querySelectorAll("#jobs details[data-job-id]")
-    .forEach((details) =>
-      logViews.set(details.dataset.jobId, {
-        open: details.open,
-        scroll: details.querySelector("pre").scrollTop,
-      }),
-    );
+  document.querySelectorAll("#jobs details[data-job-id]").forEach((details) =>
+    logViews.set(details.dataset.jobId, {
+      open: details.open,
+      scroll: details.querySelector("pre").scrollTop,
+    }),
+  );
   $("jobCount").textContent = jobs.length + (staging ? 1 : 0);
   $("jobs").replaceChildren();
   if (staging) {
@@ -1583,6 +1723,21 @@ function renderJobs(jobs) {
           await refresh();
         });
       top.append(resume);
+    }
+    if (
+      ["completed", "failed", "cancelled", "interrupted"].includes(job.state)
+    ) {
+      const remove = node("button", "删除记录");
+      remove.setAttribute("aria-label", "删除记录 " + job.id);
+      remove.title = "只删除历史记录，保留文件和未完成数据";
+      remove.onclick = () =>
+        action(remove, async () => {
+          await api("delete-record", { id: job.id });
+          logViews.delete(job.id);
+          lastJobStates.delete(job.id);
+          await refresh();
+        });
+      top.append(remove);
     }
     const metrics = transferMetrics(job);
     const progress = node(
@@ -1755,6 +1910,16 @@ layout.queueHeight = Number.isFinite(layout.queueHeight)
 layout.leftRatio = Number.isFinite(layout.leftRatio)
   ? Math.max(0.18, Math.min(0.82, layout.leftRatio))
   : 0.5;
+// Older layouts stored independent heights; keep the taller pane on migration.
+layout.localHeight = layout.remoteHeight = Math.max(
+  layout.localHeight,
+  layout.remoteHeight,
+);
+function setLayoutValue(key, value) {
+  layout[key] = value;
+  if (key === "localHeight" || key === "remoteHeight")
+    layout.localHeight = layout.remoteHeight = value;
+}
 function saveLayout() {
   localStorage.setItem("termiusplus.layout", JSON.stringify(layout));
 }
@@ -1803,14 +1968,17 @@ function bindResizer(id, key, axis, min, max) {
   handle.onpointermove = (event) => {
     if (!drag || event.pointerId !== drag.pointer) return;
     const delta = (axis === "x" ? event.clientX : event.clientY) - drag.start;
-    layout[key] = Math.max(
-      min,
-      Math.min(
-        max,
-        drag.value +
-          (axis === "x"
-            ? delta / Math.max(1, paneGrid.clientWidth - 10)
-            : delta),
+    setLayoutValue(
+      key,
+      Math.max(
+        min,
+        Math.min(
+          max,
+          drag.value +
+            (axis === "x"
+              ? delta / Math.max(1, paneGrid.clientWidth - 10)
+              : delta),
+        ),
       ),
     );
     applyLayout();
@@ -1829,12 +1997,15 @@ function bindResizer(id, key, axis, min, max) {
       positive = axis === "x" ? "ArrowRight" : "ArrowDown";
     if (event.key === negative || event.key === positive) {
       event.preventDefault();
-      layout[key] = Math.max(
-        min,
-        Math.min(
-          max,
-          layout[key] +
-            (event.key === positive ? 1 : -1) * (axis === "x" ? 0.03 : 40),
+      setLayoutValue(
+        key,
+        Math.max(
+          min,
+          Math.min(
+            max,
+            layout[key] +
+              (event.key === positive ? 1 : -1) * (axis === "x" ? 0.03 : 40),
+          ),
         ),
       );
       applyLayout();
@@ -1842,12 +2013,14 @@ function bindResizer(id, key, axis, min, max) {
     }
   };
   handle.ondblclick = () => {
-    layout[key] =
+    setLayoutValue(
+      key,
       axis === "x"
         ? 0.5
         : key === "queueHeight"
           ? 220
-          : Math.max(390, Math.round(window.innerHeight * 0.68));
+          : Math.max(390, Math.round(window.innerHeight * 0.68)),
+    );
     applyLayout();
     saveLayout();
   };

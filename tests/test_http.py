@@ -149,6 +149,44 @@ class HttpTests(unittest.TestCase):
             status, _ = self.request('/api/preview', {'side':'invalid', 'path':str(p)})
             self.assertEqual(status, 400)
 
+    def test_delete_record_persists_and_preserves_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            partial = root / '.termiusplus-partial' / 'file'
+            partial.parent.mkdir(); partial.write_text('partial data')
+            finished = app.Job(dict(direction='copy', local=directory, destination=directory, items=['file']))
+            finished.state = 'cancelled'
+            running = app.Job(finished.options.copy())
+            running.state = 'transferring'
+            history = root / 'transfers.json'
+            secondary = root / 'remote-controller' / 'transfers.json'
+            app.transfer_history.save(secondary, {finished.id: finished}, app.LOCK)
+            with patch.dict(app.JOBS, {finished.id: finished, running.id: running}, clear=True), patch('app.HISTORY_PATH', history):
+                app.checkpoint()
+                status, _ = self.request('/api/delete-record', {'id': finished.id}, headers={'Authorization': 'Bearer wrong'})
+                self.assertEqual(status, 403)
+                status, _ = self.request('/api/delete-record', {'id': running.id})
+                self.assertEqual(status, 400)
+                self.assertIn(running.id, app.JOBS)
+                self.assertFalse(running.cancel.is_set())
+                status, result = self.request('/api/delete-record', {'id': finished.id})
+                self.assertEqual(status, 200, result)
+                self.assertNotIn(finished.id, app.JOBS)
+                for path in (history, secondary):
+                    restored = app.transfer_history.restore(path, app.Job, app.RelayJob, app.RemoteJob)
+                    self.assertNotIn(finished.id, restored)
+                self.assertEqual(partial.read_text(), 'partial data')
+                status, _ = self.request('/api/delete-record', {'id': finished.id})
+                self.assertEqual(status, 400)
+
+    def test_delete_record_save_failure_keeps_record(self):
+        job = app.Job(dict(direction='copy', local='/tmp', destination='/tmp', items=['file']))
+        job.state = 'completed'
+        with patch.dict(app.JOBS, {job.id: job}, clear=True), patch('app.transfer_history.forget'), patch('app.checkpoint', side_effect=OSError('disk full')):
+            status, _ = self.request('/api/delete-record', {'id': job.id})
+            self.assertEqual(status, 400)
+            self.assertIs(app.JOBS[job.id], job)
+
     def test_large_binary_drop_request(self):
         status, created = self.request('/api/stage/create')
         self.assertEqual(status, 200)

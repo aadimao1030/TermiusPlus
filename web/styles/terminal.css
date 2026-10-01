@@ -5,8 +5,8 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  color: #d9deea;
-  background: #151820;
+  color: #e7ece8;
+  background: #141617;
 }
 * {
   box-sizing: border-box;
@@ -29,7 +29,7 @@ a {
 }
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid #a5a1ff;
+  outline: 2px solid #c5aa7c;
   outline-offset: 2px;
 }
 button:disabled {
@@ -320,4 +320,58 @@ header {
     padding: 7px 5px;
     font-size: 11px;
   }
+}
+
+/* Match the file workspace's warm graphite palette. */
+header,
+.session-bar {
+  background: #191c1c;
+  border-color: #303534;
+}
+.title,
+.mark {
+  color: #c5aa7c;
+}
+.title span {
+  color: #f0f1ec;
+}
+.view-nav {
+  align-self: stretch;
+  gap: 0;
+}
+.view-nav button {
+  border-radius: 0;
+  padding-inline: 14px;
+  color: #a1aaa6;
+}
+.view-nav button.active {
+  color: #f2f0e9;
+  background: transparent;
+  box-shadow: inset 0 -2px #c5aa7c;
+}
+.view-nav button:hover,
+.files-link:hover,
+.add-session:hover {
+  background: #282e2b;
+  color: #f0f1eb;
+}
+.session-tab.active {
+  background: #323a35;
+  border-color: #60685e;
+}
+.session-tab.active button {
+  color: #f0f1e9;
+}
+.picker-route:hover {
+  background: #35403a;
+  color: #f0f1e9;
+}
+.terminal-wrap,
+.files-frame {
+  background: #141617;
+}
+footer {
+  background: #171a1a;
+  border-color: #303534;
+  color: #9ba5a0;
 }

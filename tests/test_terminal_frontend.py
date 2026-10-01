@@ -140,6 +140,7 @@ class TerminalFrontendTests(unittest.TestCase):
 
     def test_file_pane_terminal_buttons_map_to_local_or_the_pane_connection(self):
         html=(ROOT/'web/scripts/files.js').read_text()
+        helpers=html[html.index('const routePasswords = new Map();'):html.index('let routes = [],')]
         head=html[html.index('function terminalConfig('):html.index('async function openTerminal(')]
         jet={'name':'jet','host':'jet.example','port':22,'jump':'','key':''}
         code=r"""
@@ -147,6 +148,7 @@ const assert=require('node:assert/strict');
 const routes=[__JET__],jet=routes[0],localHome='/Users/me',appOrigin='http://127.0.0.1:19387';
 function closeMenus(){}
 function token(){return 'TOKEN'}
+__HELPERS__
 __HEAD__
 function build(side,panes){return terminalConfig(side,panes)}
 const connected={kind:'remote',root:'/srv/app',connection:routes[0]};
@@ -159,7 +161,7 @@ assert.deepEqual(build('remote',{local:{kind:'local',root:''},remote:{kind:'remo
 assert.deepEqual(build('local',{local:{kind:'local',root:''},remote:{kind:'remote',root:'',connection:null}}).path,'/Users/me');
 assert.equal(build('remote',{local:connected,remote:{kind:'local',root:'/tmp/right-local'}}).localPath,'/tmp/right-local');
 console.log('FRONTEND_OK');
-""".replace('__HEAD__',head).replace('__JET__',json.dumps(jet))
+""".replace('__HELPERS__',helpers).replace('__HEAD__',head).replace('__JET__',json.dumps(jet))
         result=subprocess.run(['node','-e',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('FRONTEND_OK',result.stdout)

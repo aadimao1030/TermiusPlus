@@ -60,7 +60,7 @@ def ssh_command(route, path, ssh_args):
 
 
 class TerminalSession:
-    def __init__(self, command, name, cols=80, rows=24, cwd=None, local=False):
+    def __init__(self, command, name, cols=80, rows=24, cwd=None, local=False, ssh_environment=None):
         dimensions(cols, rows)
         self.id = secrets.token_hex(16)
         self.name = name
@@ -77,7 +77,7 @@ class TerminalSession:
         try:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
             self.process = subprocess.Popen([sys.executable, str(WORKER), *command], stdin=slave, stdout=slave, stderr=slave,
-                                            start_new_session=True, close_fds=True, cwd=cwd, env=dict(os.environ, TERM='xterm-256color'))
+                                            start_new_session=True, close_fds=True, cwd=cwd, env=dict(ssh_environment or os.environ, TERM='xterm-256color'))
         except BaseException:
             os.close(master)
             raise
@@ -213,7 +213,11 @@ def terminal_api(endpoint, data, validate_route, ssh_args):
                     SESSIONS.pop(identifier)
             if sum(not s.done and not s.closed for s in SESSIONS.values()) >= 8:
                 raise ValueError('最多同时打开 8 个终端，请先断开一个会话')
-            session = TerminalSession(command, name, cols, rows, cwd=cwd, local=local)
+            if local:
+                session = TerminalSession(command, name, cols, rows, cwd=cwd, local=True)
+            else:
+                from .ssh import ssh_env
+                session = TerminalSession(command, name, cols, rows, cwd=cwd, local=False, ssh_environment=ssh_env(route))
             SESSIONS[session.id] = session
         return dict(id=session.id, name=session.name, local=session.local)
     identifier = data.get('id')

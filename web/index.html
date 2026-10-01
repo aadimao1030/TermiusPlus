@@ -196,9 +196,9 @@
                   id="localResizer"
                   role="separator"
                   aria-orientation="horizontal"
-                  aria-label="调整左栏文件区高度"
+                  aria-label="同时调整左右文件区高度"
                   tabindex="0"
-                  title="拖动调整高度"
+                  title="拖动同时调整左右文件栏高度"
                 ></div>
               </section>
               <div
@@ -287,9 +287,9 @@
                   id="remoteResizer"
                   role="separator"
                   aria-orientation="horizontal"
-                  aria-label="调整右栏文件区高度"
+                  aria-label="同时调整左右文件区高度"
                   tabindex="0"
-                  title="拖动调整高度"
+                  title="拖动同时调整左右文件栏高度"
                 ></div>
               </section>
             </div>
@@ -351,9 +351,18 @@
           ><input id="jump" placeholder="user@bastion:22" /><label for="key"
             >密钥路径（可选）</label
           ><input id="key" placeholder="~/.ssh/id_ed25519" />
+          <label for="password">SSH 密码（可选）</label>
+          <input
+            id="password"
+            type="password"
+            autocomplete="new-password"
+            placeholder="服务器登录密码"
+          />
+          <p id="routeAuthHint" class="route-auth-hint" role="alert" hidden></p>
           <p style="margin-top: 12px; margin-bottom: 0">
-            使用 SSH 密钥或 agent。首次连接请在终端确认服务器指纹；远程需要
-            python3 和 rsync 3.x。
+            密码仅保留在本次运行的内存中，重启后需重新输入。也可使用 SSH 密钥或
+            agent。首次连接请在终端确认服务器指纹；远程需要 python3 和 rsync
+            3.x。
           </p>
         </div>
         <div class="dialog-footer">
