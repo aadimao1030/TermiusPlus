@@ -16,6 +16,8 @@ def transfer_key(options):
     # Route order is meaningful: the first route anchors server identity.
     value = {key: options[key] for key in keys if key in options}
     value['pack'] = bool(options.get('pack', False))
+    if options.get('flattenItems'):
+        value['flattenItems'] = True
     if direction not in ('relay','remote'):
         value['routes'] = options.get('routes', [])
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

@@ -184,7 +184,7 @@ def should_switch(current, alternative):
     return alternative > max(current * 1.5, current + 128 * 1024)
 
 
-def validate_items(items):
+def validate_items(items, flatten=False):
     if not isinstance(items, list) or not 1 <= len(items) <= 20000:
         raise ValueError('请选择要传输或打包的文件/文件夹')
     result = []
@@ -197,11 +197,16 @@ def validate_items(items):
         if item not in result:
             result.append(item)
     # Drop redundant children when their parent is already included.
-    return [item for item in result if not any(item.startswith(parent + '/') for parent in result if parent != item)]
+    result = [item for item in result if not any(item.startswith(parent + '/') for parent in result if parent != item)]
+    if flatten:
+        names = [posixpath.basename(item) for item in result]
+        if len(names) != len(set(names)):
+            raise ValueError('所选项目包含同名文件或文件夹，不能同时放入同一目标目录，请分开传输或先打包')
+    return result
 
 
-def create_manifest(items):
-    items = validate_items(items)
+def create_manifest(items, flatten=False):
+    items = validate_items(items, flatten)
     handle = tempfile.NamedTemporaryFile(prefix='termiusplus-list-', delete=False)
     try:
         handle.write(b'\0'.join(os.fsencode(item) for item in items) + b'\0')
@@ -391,12 +396,24 @@ class Job:
 
     def snapshot(self):
         with LOCK:
+            direction = self.options['direction']
+            target = None
+            if direction in ('upload', 'download', 'copy', 'relay', 'remote'):
+                remote = direction in ('upload', 'relay', 'remote')
+                endpoint = self.options.get('destination', {}) if direction in ('relay', 'remote') else {}
+                path = endpoint.get('path', '') if endpoint else self.options.get('remote' if remote else 'destination' if direction == 'copy' else 'local', '')
+                routes = endpoint.get('routes', []) if endpoint else self.options.get('routes', [])
+                target = dict(kind='remote' if remote else 'local', path=path)
+                if remote and routes:
+                    target['route'] = routes[0]
+                target['paths'] = [posixpath.join(path, posixpath.basename(item) if self.options.get('flattenItems') else item) for item in self.options.get('items') or []]
             return dict(id=self.id, state=self.state, route=self.route, speed=self.speed,
                         log=list(self.log), error=self.error, switches=self.switches,
                         direction=self.options['direction'], side=self.options.get('side'), started=self.started, progress=self.progress, result=self.result,
                         items=self.options.get('items', []), local=self.options.get('local', ''), remote=self.options.get('remote', ''),
                         sourcePane=self.options.get('sourcePane'), targetPane=self.options.get('targetPane'),
                         stageProgress=self.progress, transferredBytes=self.transferred_bytes, eta=self.eta,
+                        target=target,
                         resumable=transfer_history.resumable(self), legacyResume=bool(self.options.get('_legacy')), resumedFrom=self.options.get('_resumedFrom'))
 
     def command(self, binary, route, canonical, local):
@@ -408,6 +425,8 @@ class Job:
             source, destination = local, canonical.rstrip('/') + '/'
         # No delete/inplace/append: partial data is a basis for a checked delta transfer.
         selection = ['-r', '--from0', '--files-from=' + self.manifest] if self.manifest else []
+        if self.manifest and self.options.get('flattenItems'):
+            selection.append('--no-relative')
         return [binary, '-a', '-s', *selection, '--no-owner', '--no-group', '--partial-dir=.termiusplus-partial',
                 '--no-whole-file', '--info=progress2', '--no-inc-recursive', '--outbuf=L', '--timeout=30',
                 *transport, '--', source, destination]
@@ -486,7 +505,7 @@ class Job:
         if self.options.get('pack'):
             self.options['items'] = [self.pack(root=str(source))]
         if self.options.get('items'):
-            self.manifest = create_manifest(self.options['items'])
+            self.manifest = create_manifest(self.options['items'], self.options.get('flattenItems', False))
         if self.cancel.is_set():
             return
         self.state = 'transferring'
@@ -579,7 +598,7 @@ class Job:
                 item = self.pack(current, canonical if self.options['direction'] == 'download' else local)
                 self.options['items'] = [item]
             if self.options.get('items'):
-                self.manifest = create_manifest(self.options['items'])
+                self.manifest = create_manifest(self.options['items'], self.options.get('flattenItems', False))
             self.event('已核对 %d 条可用线路；%s' % (len(eligible), '没有同一服务器的备用线路，连接故障时将重试当前线路' if len(eligible) == 1 else '连接故障时自动尝试同一服务器的备用线路'))
             retries = 0
             while not self.cancel.is_set():
@@ -739,7 +758,7 @@ class RelayJob(Job):
             source, destination = self.options['source'], self.options['destination']
             self.route = source['routes'][0].get('name', source['routes'][0]['host']) + ' → ' + destination['routes'][0].get('name', destination['routes'][0]['host'])
             common = dict(auto=self.options.get('auto', True), threshold=self.options.get('threshold', 1))
-            download = dict(common, direction='download', routes=source['routes'], local=str(directory), remote=source['path'], pack=self.options.get('pack', False))
+            download = dict(common, direction='download', routes=source['routes'], local=str(directory), remote=source['path'], pack=self.options.get('pack', False), flattenItems=self.options.get('flattenItems', False))
             if self.options.get('items'):
                 download['items'] = self.options['items']
             download = self.options.get('_relayDownloadOptions', download)
@@ -763,7 +782,7 @@ class RelayJob(Job):
             self.phase = 1
             upload = dict(common, direction='upload', routes=destination['routes'], local=str(directory), remote=destination['path'])
             if download.get('items'):
-                upload['items'] = download['items']
+                upload['items'] = [posixpath.basename(item) for item in download['items']] if download.get('flattenItems') else download['items']
                 self.options['items'] = download['items']
             self.child = Job(upload)
             self.child.cancel = self.cancel
@@ -960,8 +979,10 @@ class Handler(BaseHTTPRequestHandler):
                     data['remoteTarget']=validate_route(data.get('remoteTarget'))
                     if data.get('executor') not in ('source','destination'):
                         raise ValueError('请选择远程执行端')
+                if 'flattenItems' in data and not isinstance(data['flattenItems'], bool):
+                    raise ValueError('传输路径选项不正确')
                 if data.get('items') is not None:
-                    data['items'] = validate_items(data['items'])
+                    data['items'] = validate_items(data['items'], data.get('flattenItems', False) and not data.get('pack'))
                 if data.get('pack') or data['direction'] == 'pack':
                     validate_items(data.get('items'))
                 if data.get('stage'):

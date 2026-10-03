@@ -62,8 +62,11 @@ def run(directory):
             state['result']={'archive':archive}
         selection=[]
         if items:
+            if config.get('flattenItems') and len({Path(item).name for item in items}) != len(items):
+                raise ValueError('所选项目包含同名文件或文件夹，请分开传输或先打包')
             manifest=directory/'files';manifest.write_bytes(b''.join(item.encode('utf-8')+b'\0' for item in items))
             selection=['-r','--from0','--files-from='+str(manifest)]
+            if config.get('flattenItems'):selection.append('--no-relative')
         transport=' '.join(shlex.quote(arg) for arg in ssh)
         source=config['source'].rstrip('/')+'/'
         destination=config['destination'].rstrip('/')+'/'

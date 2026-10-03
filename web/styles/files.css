@@ -1818,6 +1818,26 @@ button:hover {
 .job:hover {
   background: #212626;
 }
+.job-target {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.job-target span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-target button {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  color: #d5bd91;
+  font-size: 11px;
+}
 .job-top .state,
 .edit-route {
   color: #d5bd91;

@@ -21,7 +21,9 @@ class RemoteTasksTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source';target=root/'target';binpath=root/'bin'
             for p in (source,target,binpath,root/'home',root/'tmux'):p.mkdir()
-            payload=os.urandom(256*1024);(source/'payload').write_bytes(payload)
+            (source/'tree'/'folder').mkdir(parents=True)
+            payload=os.urandom(256*1024);(source/'tree'/'payload').write_bytes(payload)
+            (source/'tree'/'folder'/'child').write_text('folder contents')
             ssh=binpath/'ssh'
             ssh.write_text('#!'+sys.executable+'\nimport os,sys,subprocess,shlex\na=sys.argv[1:]\nwhile a and a[0].startswith("-"):\n n=2 if a[0] in ("-o","-p","-i","-J") else 1\n a=a[n:]\na=a[1:]\nif len(a)==1:a=shlex.split(a[0])\nsys.exit(subprocess.call(a))\n');ssh.chmod(0o700)
             real_rsync=app.rsync_binary();rsync=binpath/'rsync'
@@ -35,7 +37,7 @@ class RemoteTasksTests(unittest.TestCase):
                 # local_info identity is different; obtain actual REMOTE_SCRIPT identity.
                 output=subprocess.check_output([sys.executable,'-c',script,str(peer),'identity'])
                 identity=json.loads(output)['identity']
-                config=dict(source=str(source),destination=str(target),pull=pull,target=dict(host='fixture',port=22),identity=identity,infoScript=script,items=['payload'],pack=False)
+                config=dict(source=str(source),destination=str(target),pull=pull,target=dict(host='fixture',port=22),identity=identity,infoScript=script,items=['tree/payload','tree/folder'],flattenItems=True,pack=False)
                 p=dict(op='start',id=identifier,config=config,worker=(Path(__file__).resolve().parents[1]/'termiusplus/remote_worker.py').read_text())
                 encoded=base64.b64encode(json.dumps(p).encode()).decode()
                 # This launching process exits immediately; no controller remains running.
@@ -49,6 +51,8 @@ class RemoteTasksTests(unittest.TestCase):
                     time.sleep(.1)
                 self.assertEqual(data['state'],'completed',data)
                 self.assertEqual((target/'payload').read_bytes(),payload)
+                self.assertEqual((target/'folder'/'child').read_text(),'folder contents')
+                self.assertFalse((target/'tree').exists())
             subprocess.run(['tmux','-L','termiusplus','kill-server'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def test_restore_reattaches_instead_of_creating_new_session_and_resume_has_new_handle(self):

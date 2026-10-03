@@ -161,6 +161,12 @@ async function api(path, data = {}) {
   if (!response.ok) throw Error(result.error || "请求失败");
   return result;
 }
+async function startJob(path, options) {
+  const job = await api(path, options);
+  // Small transfers can finish before the first status request.
+  lastJobStates.set(job.id, "queued");
+  return job;
+}
 async function action(button, callback) {
   if (button) button.disabled = true;
   try {
@@ -327,7 +333,7 @@ function renderLocationMenu(side) {
   add.onclick = () => openRouteEditor(null, side);
   menu.append(add);
 }
-async function selectEndpoint(side, kind, connection) {
+async function selectEndpoint(side, kind, connection, path) {
   closeMenus();
   focus(side);
   const p = panes[side];
@@ -339,7 +345,7 @@ async function selectEndpoint(side, kind, connection) {
   p.entries = [];
   p.selected.clear();
   $(side + "Path").value =
-    p.paths[endpointKey(side)] || (kind === "local" ? localHome : "~");
+    path || p.paths[endpointKey(side)] || (kind === "local" ? localHome : "~");
   updateHeading(side);
   updateSelection(side);
   savePanePreferences();
@@ -1060,6 +1066,7 @@ function createTransfer(sourceSide, targetSide, sourceRoot, targetRoot, paths) {
       sourcePane: sourceSide,
       targetPane: targetSide,
       items: paths?.map((path) => relative(sourceRoot, path)),
+      flattenItems: Boolean(paths?.length),
       sourceLabel:
         (sourceSide ? endpointLabel(sourceSide) : "Finder") + "：" + sourceRoot,
       targetLabel: endpointLabel(targetSide) + "：" + targetRoot,
@@ -1156,7 +1163,7 @@ function showTransfer(options, names, external = false) {
       : external
         ? "外部拖放会先暂存到本机，再用 rsync 传输；需要额外磁盘空间。"
         : options.items
-          ? "文件夹会保留名称及相对目录层级。"
+          ? "选中项目直接放入目标目录；文件夹保留名称和内部结构，不包含上级目录。"
           : "合并整个源目录的内容，包括隐藏文件；显示开关只影响浏览。";
   if (between) updateRemoteSettings();
   $("transferDialog").showModal();
@@ -1406,7 +1413,7 @@ $("confirmTransfer").onclick = () =>
       delete options.external;
     }
     options.pack = pack;
-    await api("start", options);
+    await startJob("start", options);
     $("transferDialog").close();
     pending = null;
     notice(pack ? "任务已创建，正在打包后传输" : "已加入传输队列");
@@ -1418,7 +1425,7 @@ async function packSelection() {
   if (!entries.length) throw Error("请先选中文件或文件夹，然后打包");
   if (p.loadedKey !== endpointKey(focused))
     throw Error("位置已变化，请重新打开目录");
-  await api("pack", {
+  await startJob("pack", {
     side: p.kind,
     sourcePane: focused,
     targetPane: focused,
@@ -1718,7 +1725,7 @@ function renderJobs(jobs) {
             showTransfer(options, job.items);
             return;
           }
-          await api("resume", { id: job.id });
+          await startJob("resume", { id: job.id });
           notice("已创建续传任务，正在校验并复用未完成数据");
           await refresh();
         });
@@ -1792,6 +1799,35 @@ function renderJobs(jobs) {
     details.open = view?.open ?? job.state === "failed";
     details.append(summary, log);
     card.append(top, progress, meta, details);
+    if (job.target?.path) {
+      const destination = node("div", undefined, "job-target"),
+        location = node(
+          "span",
+          "目标：" +
+            (job.target.kind === "remote"
+              ? (job.target.route?.name || job.target.route?.host || "远程") + " · "
+              : "本地 · ") +
+            (job.target.paths?.length === 1
+              ? job.target.paths[0]
+              : job.target.path),
+        ),
+        open = node("button", "打开目标目录");
+      location.title = location.textContent;
+      open.setAttribute("aria-label", "打开任务目标目录 " + job.id);
+      open.onclick = () =>
+        action(open, async () => {
+          const side = job.targetPane || (job.target.kind === "local" ? "local" : "remote"),
+            connection = job.target.route
+              ? routes.find((r) => routePasswordKey(r) === routePasswordKey(job.target.route)) || job.target.route
+              : null,
+            directory = job.target.paths?.length === 1
+              ? job.target.paths[0].replace(/\/[^/]+$/, "") || "/"
+              : job.target.path;
+          await selectEndpoint(side, job.target.kind, connection, directory);
+        });
+      destination.append(location, open);
+      card.append(destination);
+    }
     if (job.remoteSession)
       card.append(
         node(

@@ -89,7 +89,7 @@ def make_job_class(BaseJob, remote_info, ssh_args, checkpoint, base, info_script
                     target=remote_info(self.options['destination']['routes'][0],self.options['destination']['path'],True)
                     pull=self.options.get('executor')=='destination'
                     peer=source if pull else target
-                    config=dict(source=source['path'],destination=target['path'],pull=pull,target=self.options['remoteTarget'],identity=peer['identity'],infoScript=info_script,items=self.options.get('items'),pack=bool(self.options.get('pack')),archiveScript=archive_script)
+                    config=dict(source=source['path'],destination=target['path'],pull=pull,target=self.options['remoteTarget'],identity=peer['identity'],infoScript=info_script,items=self.options.get('items'),flattenItems=bool(self.options.get('flattenItems')),pack=bool(self.options.get('pack')),archiveScript=archive_script)
                     if config['pack']:config['archiveName']=archive_name(config['items'])
                     if self.cancel.is_set():self.state='cancelled';return
                     # Persist the handle BEFORE submitting: ambiguous SSH acknowledgements must not launch twice.
