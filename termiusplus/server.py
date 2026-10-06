@@ -11,6 +11,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import statistics
 import subprocess
 import threading
 import time
@@ -22,6 +23,7 @@ import atexit
 from . import terminal_sessions
 from . import transfer_history
 from . import remote_tasks
+from . import route_probe, scheduler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .filesystem import file_preview, file_operation, local_info
@@ -135,41 +137,8 @@ def rsync_binary():
     raise ValueError('需要 rsync 3.x。macOS 可执行 brew install rsync，然后重新启动。系统自带 openrsync 不支持本工具的进度与续传参数。')
 
 
-def measure(route, cancel=None):
-    # An explicit SSH download probe, not ping latency. Upload performance may differ.
-    command = "python3 -c 'import sys;sys.stdout.buffer.write(bytes(4*1024*1024))'"
-    process = subprocess.Popen(ssh_args(route) + [route['host'], command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, env=ssh_env(route))
-    timer = threading.Timer(12, lambda: stop_process(process))
-    timer.start()
-    started = time.monotonic()
-    count = 0
-    first = None
-    try:
-        while True:
-            if cancel and cancel.is_set():
-                stop_process(process)
-                raise ValueError('任务已取消')
-            block = process.stdout.read(65536)
-            if not block:
-                break
-            first = first or time.monotonic()
-            count += len(block)
-        error = process.stderr.read().decode(errors='replace')
-        code = process.wait()
-        if code or count != 4 * 1024 * 1024:
-            raise ValueError(error.strip()[-1000:] or '线路测速超时')
-        elapsed = max(time.monotonic() - started, .001)
-        return count / elapsed
-    finally:
-        timer.cancel()
-        stop_process(process)
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        process.stdout.close()
-        process.stderr.close()
+def measure(route, cancel=None, direction='download'):
+    return route_probe.measure(route, cancel, direction, ssh_args, ssh_env, stop_process)
 
 
 def stop_process(process):
@@ -182,6 +151,14 @@ def stop_process(process):
 
 def should_switch(current, alternative):
     return alternative > max(current * 1.5, current + 128 * 1024)
+
+
+def needs_route_check(samples, now, threshold, expected, last_check, switches, interval=60):
+    recent = [s for s in samples if now - s[0] <= 25]
+    if len(recent) < 5 or recent[-1][0] - recent[0][0] < 18 or now - recent[-1][0] >= 4:
+        return False
+    average = statistics.median(s[1] for s in recent)
+    return average < max(threshold, expected * .6) and now - last_check > interval and switches < 6
 
 
 def validate_items(items, flatten=False):
@@ -389,6 +366,9 @@ class Job:
         self.transferred_bytes = 0
         self.eta = ''
         self.result = None
+        self.queue_reason = ''
+        self.byte_samples = collections.deque()
+        self.byte_sample = None
 
     def event(self, message):
         with LOCK:
@@ -414,6 +394,7 @@ class Job:
                         sourcePane=self.options.get('sourcePane'), targetPane=self.options.get('targetPane'),
                         stageProgress=self.progress, transferredBytes=self.transferred_bytes, eta=self.eta,
                         target=target,
+                        queueReason=self.queue_reason,
                         resumable=transfer_history.resumable(self), legacyResume=bool(self.options.get('_legacy')), resumedFrom=self.options.get('_resumedFrom'))
 
     def command(self, binary, route, canonical, local):
@@ -447,6 +428,14 @@ class Job:
                 self.samples.append((now, self.speed))
                 while self.samples and now - self.samples[0][0] > 25:
                     self.samples.popleft()
+                previous = self.byte_sample
+                if previous is None or parsed['bytes'] < previous[1]:
+                    self.byte_sample = (now, parsed['bytes'])
+                elif now - previous[0] >= .5:
+                    self.byte_samples.append((now, (parsed['bytes'] - previous[1]) / (now - previous[0])))
+                    self.byte_sample = (now, parsed['bytes'])
+                while self.byte_samples and now - self.byte_samples[0][0] > 25:
+                    self.byte_samples.popleft()
         self.event(text)
 
     def read_output(self, process):
@@ -579,21 +568,23 @@ class Job:
                     if 'rsyncVersion' in info and not re.search(r'rsync\s+version\s+[3-9]\.', info['rsyncVersion']):
                         raise ValueError('远程需要 rsync 3.x，请安装并确保 SSH 登录的 PATH 能找到它')
                     speed = 0
-                    if len(routes) > 1:
+                    if len(routes) > 1 and self.options.get('auto', True):
                         try:
-                            speed = measure(route, self.cancel)
+                            speed = measure(route, self.cancel, self.options['direction'])
                         except Exception as exc:
                             self.event(route['name'] + ' 测速失败，保留线路并尝试实际传输: ' + str(exc))
                     if self.cancel.is_set():
                         return
                     eligible.append((speed, route))
-                    self.event(route['name'] + (' 测速 %.2f MiB/s' % (speed / 1048576) if speed else ' 已连接'))
+                    self.event(route['name'] + ((' 上传' if self.options['direction'] == 'upload' else ' 下载') + '测速 %.2f MiB/s' % (speed / 1048576) if speed else ' 已连接'))
                 except Exception as exc:
                     self.event(route['name'] + ': ' + str(exc))
             if not eligible:
                 raise ValueError('没有可用且指向同一目录的线路，请检查 SSH 和远程 python3')
             eligible.sort(key=lambda item: item[0], reverse=True)
             current = eligible[0][1]
+            expected = eligible[0][0]
+            check_interval = 60
             if self.options.get('pack'):
                 item = self.pack(current, canonical if self.options['direction'] == 'download' else local)
                 self.options['items'] = [item]
@@ -605,6 +596,8 @@ class Job:
                 self.route = current['name']
                 self.state = 'transferring'
                 self.samples.clear()
+                self.byte_samples.clear()
+                self.byte_sample = None
                 self.speed = 0
                 self.progress = 0
                 self.transferred_bytes = 0
@@ -618,34 +611,53 @@ class Job:
                 while self.process.poll() is None and not self.cancel.wait(1):
                     now = time.monotonic()
                     with LOCK:
-                        samples = list(self.samples)
+                        samples = list(self.byte_samples)
                     # Require sustained progress samples. Silence may mean a file-list scan,
                     # disk work or completion, so silence alone must never trigger a switch.
-                    sustained = len(samples) >= 5 and samples[-1][0] - samples[0][0] >= 18 and now - samples[-1][0] < 4
-                    average = sum(s[1] for s in samples) / len(samples) if samples else 0
-                    if self.options.get('auto', True) and len(eligible) > 1 and sustained and average < float(self.options.get('threshold', 1)) * 1048576 and now - self.last_switch > 60 and self.switches < 6:
+                    if self.options.get('auto', True) and len(eligible) > 1 and needs_route_check(samples, now, float(self.options.get('threshold', 1)) * 1048576, expected, self.last_switch, self.switches, check_interval):
                         self.last_switch = now
-                        self.event('持续低速，比较备用线路与当前线路')
+                        self.event('实际速度持续下降，暂停本次连接后按传输方向比较线路')
                         scores = []
+                        stop_process(self.process)
+                        try:
+                            stopped_code = self.process.wait(timeout=8)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                            stopped_code = self.process.wait()
+                        reader.join(timeout=3)
+                        if stopped_code == 0 or self.cancel.is_set():
+                            break
+                        # Stop cleanly first: parallel probes would compete with this data stream.
+                        # A stopped rsync connection also cannot expire its remote idle timeout.
+                        replacement = current
+                        self.state = 'checking'
                         for _, candidate in eligible:
                             try:
                                 if remote_info(candidate, path, True)['identity'] != baseline:
                                     continue
-                                scores.append((measure(candidate, self.cancel), candidate))
+                                score = measure(candidate, self.cancel, self.options['direction'])
+                                scores.append((score, candidate))
+                                self.event(candidate['name'] + ' 复测 %.2f MiB/s' % (score / 1048576))
                             except Exception as exc:
                                 self.event('测速失败: ' + str(exc))
-                        if self.cancel.is_set() or self.process.poll() is not None:
-                            break
+                            if self.cancel.is_set(): break
                         current_score = next((s for s, r in scores if r == current), None)
                         alternatives = [(s, r) for s, r in scores if r != current]
                         if current_score is not None and alternatives:
+                            expected = current_score
                             best_score, best = max(alternatives, key=lambda item: item[0])
                             if should_switch(current_score, best_score):
                                 replacement = best
-                                self.event('备用线路明显更快，停止当前连接并续传')
-                                stop_process(self.process)
-                                break
-                        self.samples.clear()
+                                expected = best_score
+                                self.event('备用线路明显更快，通过备用线路续传')
+                        if replacement == current:
+                            expected = statistics.median(s[1] for s in samples) if samples else expected
+                            check_interval = min(check_interval * 2, 600)
+                            self.event('备用线路无持续优势，保留当前线路续传')
+                        else:
+                            check_interval = 60
+                        self.last_switch = time.monotonic()
+                        break
                 if self.cancel.is_set():
                     stop_process(self.process)
                 try:
@@ -657,7 +669,8 @@ class Job:
                 if self.cancel.is_set():
                     return
                 if replacement:
-                    self.switches += 1
+                    if replacement != current:
+                        self.switches += 1
                     current = replacement
                     continue
                 if code == 0:
@@ -686,6 +699,8 @@ class Job:
                                     self.switches += 1
                                     self.event('故障切换到 ' + candidate['name'])
                                 current = candidate
+                                check_interval = 60
+                                expected = next((score for score, route in eligible if route == candidate), 0)
                                 recovered = True
                                 break
                             except Exception as exc:
@@ -837,14 +852,38 @@ def new_transfer(options, previous=None):
     return job
 
 
-def launch(job):
-    checkpoint()
-    def run():
-        try:
-            job.run()
-        finally:
-            checkpoint()
-    threading.Thread(target=run, daemon=True).start()
+RESOURCE_SCRIPT = r'''
+import os,sys,json,platform,hashlib
+p=json.load(sys.stdin)
+try: machine=open('/etc/machine-id').read().strip()
+except OSError: machine=platform.node()
+root=os.path.abspath(os.path.expanduser(p['path']))
+paths=[]
+for item in p['items']:
+ candidate=os.path.normpath(os.path.join(root,item));paths.extend([candidate,os.path.realpath(candidate)])
+print(json.dumps(dict(machine=hashlib.sha256(machine.encode()).hexdigest(),paths=paths)))
+'''
+
+
+def remote_resources(endpoint, items):
+    route = endpoint['routes'][0]
+    command = 'python3 -c ' + shlex.quote(RESOURCE_SCRIPT)
+    result = subprocess.run(ssh_args(route) + [route['host'], command],
+                            input=json.dumps(dict(path=endpoint['path'], items=items)).encode(),
+                            capture_output=True, timeout=20, env=ssh_env(route))
+    if result.returncode:
+        raise ValueError('无法核对远程读写路径')
+    data = json.loads(result.stdout)
+    if not re.fullmatch('[0-9a-f]{64}', data['machine']) or len(data['paths']) != 2 * len(items) or any(not isinstance(p, str) or not p.startswith('/') for p in data['paths']):
+        raise ValueError('远程读写路径不正确')
+    return data['machine'], data['paths']
+
+
+SCHEDULER = scheduler.TransferScheduler(lambda options: scheduler.resources(options, remote_resources), checkpoint, LOCK)
+
+
+def launch(job, attached=False):
+    return SCHEDULER.submit(job, attached)
 
 
 def validate_endpoint(endpoint):
@@ -957,7 +996,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/files':
                 result = file_action(data)
             elif self.path == '/api/probe':
-                result = {'speed': measure(validate_route(data['route']))}
+                direction = data.get('direction', 'download')
+                result = {'speed': measure(validate_route(data['route']), direction=direction), 'direction': direction}
             elif self.path in ('/api/start', '/api/pack'):
                 legacy_resume_id = data.pop('_resumeId', None)
                 data = {k: v for k, v in data.items() if not k.startswith('_')}
@@ -996,8 +1036,6 @@ class Handler(BaseHTTPRequestHandler):
                 if data['direction'] not in ('pack','remote'):
                     rsync_binary()
                 with LOCK:
-                    if any(j.state not in transfer_history.TERMINAL for j in JOBS.values()):
-                        raise ValueError('请等待当前任务完成或取消后再传输，避免同时写入同一目录')
                     match = next((j for j in reversed(list(JOBS.values())) if transfer_history.resumable(j) and j.transfer_key == transfer_history.transfer_key(data)), None)
                     if legacy_resume_id:
                         match = JOBS.get(legacy_resume_id)
@@ -1007,18 +1045,16 @@ class Handler(BaseHTTPRequestHandler):
                     JOBS[job.id] = job
                     if data.get('stage'):
                         stage['busy'] = True
-                launch(job)
+                    launch(job)
                 result = {'id': job.id}
             elif self.path == '/api/resume':
                 with LOCK:
                     previous = JOBS.get(data.get('id'))
                     if not previous or not transfer_history.resumable(previous) or previous.options.get('_legacy'):
                         raise ValueError('此任务不能续传')
-                    if any(j.state not in transfer_history.TERMINAL for j in JOBS.values()):
-                        raise ValueError('请先等待当前任务完成或取消')
                     job = new_transfer(previous.options, previous)
                     JOBS[job.id] = job
-                launch(job)
+                    launch(job)
                 result = {'id': job.id}
             elif self.path == '/api/delete-record':
                 with LOCK:
@@ -1038,10 +1074,12 @@ class Handler(BaseHTTPRequestHandler):
                 result = {'ok': True}
             elif self.path == '/api/cancel':
                 job = JOBS[data['id']]
-                if isinstance(job,RemoteJob):
+                if isinstance(job,RemoteJob) and job.options.get('_remoteId'):
                     job.request_cancel()
                 else:
-                    job.cancel.set()
+                    SCHEDULER.cancel(job)
+                    if job.options.get('stage') in STAGES:
+                        STAGES[job.options['stage']]['busy'] = False
                     stop_process(job.process)
                 result = {'ok': True}
             else:
@@ -1064,7 +1102,10 @@ def main():
         for identifier, job in transfer_history.restore(secondary, Job, RelayJob, RemoteJob).items():
             if identifier not in JOBS: JOBS[identifier] = job
     for job in list(JOBS.values()):
-        if isinstance(job,RemoteJob) and job.state not in transfer_history.TERMINAL:
+        if isinstance(job,RemoteJob) and job.options.get('_remoteId') and job.state not in transfer_history.TERMINAL:
+            launch(job, attached=True)
+    for job in list(JOBS.values()):
+        if job.state == 'queued' and not job.options.get('_remoteId'):
             launch(job)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print('TermiusPlus 已启动，请在浏览器打开：\nhttp://127.0.0.1:%s/#%s' % (server.server_port, TOKEN), flush=True)
@@ -1073,11 +1114,12 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        SCHEDULER.close()
         for job in list(JOBS.values()):
             if isinstance(job,RemoteJob):
                 job.monitor_stop.set()
                 continue
-            if job.state not in transfer_history.TERMINAL:
+            if job.state not in transfer_history.TERMINAL and job.state != 'queued':
                 job.cancel.set()
                 stop_process(job.process)
         checkpoint()

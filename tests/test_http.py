@@ -126,17 +126,59 @@ class HttpTests(unittest.TestCase):
                 resumed=app.JOBS[result['id']]
                 self.assertEqual(resumed.options['_resumedFrom'],previous.id)
                 self.assertFalse(resumed.cancel.is_set())
-                status,_=self.request('/api/resume',{'id':previous.id})
-                self.assertEqual(status,400) # No concurrent writer.
+                status,second=self.request('/api/resume',{'id':previous.id})
+                self.assertEqual(status,200) # Conflicting work is accepted and scheduled.
+                self.assertEqual(app.JOBS[second['id']].state,'queued')
+                app.JOBS[second['id']].state='cancelled'
                 resumed.state='cancelled'
                 status,result=self.request('/api/start',dict(options,_relayDirectory='/must/not/be/used'))
                 self.assertEqual(status,200,result)
                 again=app.JOBS[result['id']]
-                self.assertEqual(again.options['_resumedFrom'],resumed.id)
+                self.assertEqual(again.options['_resumedFrom'],second['id'])
                 self.assertNotIn('_relayDirectory',again.options)
                 again.state='completed'
                 status,_=self.request('/api/resume',{'id':again.id})
                 self.assertEqual(status,400)
+
+    def test_parallel_independent_transfers_and_conflict_queued_until_writer_finishes(self):
+        from termiusplus.scheduler import TransferScheduler, resources
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);a=root/'a';b=root/'b';target=root/'target'
+            for path in (a,b,target):path.mkdir()
+            (a/'file').write_bytes(os.urandom(512*1024))
+            (b/'file').write_bytes(b'following writer')
+            (b/'other').write_bytes(b'independent')
+            manager=TransferScheduler(lambda o:resources(o,None),app.checkpoint,app.LOCK)
+            original=app.Job.command;threads=[]
+            def command(job,*args):
+                result=original(job,*args)
+                return [result[0],'--bwlimit=128',*result[1:]] if job.options['local']==str(a) else result
+            def launch(job):threads.append(manager.submit(job))
+            def wait(predicate):
+                deadline=time.monotonic()+8
+                while not predicate() and time.monotonic()<deadline:time.sleep(.02)
+                self.assertTrue(predicate())
+            with patch.dict(app.JOBS,{},clear=True),patch('app.HISTORY_PATH',root/'history.json'),patch('app.SCHEDULER',manager),patch('app.launch',side_effect=launch),patch.object(app.Job,'command',command):
+                try:
+                    def submit(source,item):
+                        code,result=self.request('/api/start',dict(direction='copy',local=str(source),destination=str(target),items=[item],flattenItems=True))
+                        self.assertEqual(code,200,result)
+                        return app.JOBS[result['id']]
+                    first=submit(a,'file');wait(lambda:first.state=='transferring')
+                    queued=submit(b,'file');wait(lambda:first.id in queued.queue_reason)
+                    separate=submit(b,'other');wait(lambda:separate.state=='completed')
+                    self.assertEqual(queued.state,'queued')
+                    self.assertNotEqual(first.state,'completed')
+                    self.assertEqual((target/'other').read_bytes(),b'independent')
+                    wait(lambda:queued.state=='completed')
+                    self.assertEqual(first.state,'completed')
+                    self.assertEqual((target/'file').read_bytes(),b'following writer')
+                finally:
+                    for job in list(app.JOBS.values()):
+                        if job.state not in app.transfer_history.TERMINAL:
+                            manager.cancel(job);app.stop_process(job.process)
+                    for thread in threads:thread.join(5)
+                    manager.close()
 
     def test_preview_endpoint_is_read_only(self):
         with tempfile.TemporaryDirectory() as d:

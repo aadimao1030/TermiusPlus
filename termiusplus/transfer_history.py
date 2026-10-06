@@ -90,7 +90,7 @@ def restore(path, job_class, relay_class, remote_class=None):
                 setattr(job, name, snapshot[name])
         job.log.extend(snapshot.get('log', []))
         job.restored_snapshot = snapshot
-        if job.state not in TERMINAL and not (options['direction']=='remote' and options.get('_remoteId')):
+        if job.state not in TERMINAL and job.state != 'queued' and not (options['direction']=='remote' and options.get('_remoteId')):
             job.state = 'interrupted'
             job.event('上次服务中断，未完成数据已保留，可点击续传')
         jobs[job.id] = job

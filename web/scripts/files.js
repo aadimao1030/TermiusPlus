@@ -1799,6 +1799,8 @@ function renderJobs(jobs) {
     details.open = view?.open ?? job.state === "failed";
     details.append(summary, log);
     card.append(top, progress, meta, details);
+    if (job.queueReason)
+      card.append(node("div", job.queueReason, "job-meta"));
     if (job.target?.path) {
       const destination = node("div", undefined, "job-target"),
         location = node(
