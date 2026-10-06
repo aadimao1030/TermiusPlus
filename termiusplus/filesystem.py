@@ -47,7 +47,7 @@ def file_preview(path):
 
 def file_operation(root, path, operation, name=None):
     """Create or rename without replacement, or move entries into recoverable trash."""
-    import os, uuid, ctypes, sys
+    import os, uuid, ctypes, sys, errno, stat
     root = os.path.abspath(os.path.expanduser(root))
     path = os.path.abspath(os.path.expanduser(path))
     creating = operation in ('create_file', 'create_folder')
@@ -79,17 +79,52 @@ def file_operation(root, path, operation, name=None):
             return dict(path=target)
         if os.path.lexists(target):
             raise ValueError('同名项目已存在，不会覆盖')
-        # Atomic no-replace rename, including directories and symlinks.
+        # Prefer atomic no-replace rename. Some shared filesystems reject its
+        # flags even when libc and the kernel provide the function.
         libc = ctypes.CDLL(None, use_errno=True)
-        if sys.platform == 'darwin':
+        error = errno.ENOSYS
+        if sys.platform == 'darwin' and hasattr(libc, 'renamex_np'):
             result = libc.renamex_np(os.fsencode(path), os.fsencode(target), 4)
+            error = ctypes.get_errno()
         elif sys.platform.startswith('linux') and hasattr(libc, 'renameat2'):
             result = libc.renameat2(-100, os.fsencode(path), -100, os.fsencode(target), 1)
-        else:
-            raise ValueError('此系统暂不支持安全重命名')
-        if result != 0:
             error = ctypes.get_errno()
+        else:
+            result = -1
+        if result == 0:
+            return dict(path=target)
+        if error not in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
             raise OSError(error, os.strerror(error))
+        if not stat.S_ISDIR(os.lstat(path).st_mode):
+            # link() claims the destination exclusively, including symlinks.
+            os.link(path, target, follow_symlinks=False)
+            linked = os.lstat(target)
+            try:
+                os.unlink(path)
+            except Exception:
+                try:
+                    current = os.lstat(target)
+                    if (current.st_dev, current.st_ino) == (linked.st_dev, linked.st_ino):
+                        os.unlink(target)
+                except OSError:
+                    pass
+                raise
+        else:
+            # Directories cannot be hard-linked. Reserve an empty destination
+            # before ordinary rename so competing creates fail rather than
+            # overwriting a pre-existing directory on NFS/parallel storage.
+            os.mkdir(target, 0o700)
+            reserved = os.lstat(target)
+            try:
+                os.rename(path, target)
+            except Exception:
+                try:
+                    current = os.lstat(target)
+                    if (current.st_dev, current.st_ino) == (reserved.st_dev, reserved.st_ino):
+                        os.rmdir(target)
+                except OSError:
+                    pass
+                raise
         return dict(path=target)
     if operation == 'trash':
         trash = os.path.join(parent, '.termiusplus-trash')

@@ -6,10 +6,79 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import shlex
+import ctypes
+import errno
+from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app
 
 class FileActionTests(unittest.TestCase):
+    @staticmethod
+    def unsupported_rename(error=errno.EINVAL):
+        def rename(*args):
+            ctypes.set_errno(error)
+            return -1
+        return SimpleNamespace(renameat2=rename,renamex_np=rename)
+
+    def test_shared_filesystem_fallback_preserves_files_directories_and_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'file').write_text('keep')
+            folder=root/'folder';folder.mkdir(mode=0o750);(folder/'nested').write_text('nested')
+            (root/'link').symlink_to('file');(root/'dangling').symlink_to('missing')
+            with patch('ctypes.CDLL',return_value=self.unsupported_rename()):
+                for name in ['folder','link','dangling','file']:
+                    app.file_operation(directory,str(root/name),'rename','new-'+name)
+                    self.assertFalse((root/name).exists());self.assertFalse((root/name).is_symlink())
+            self.assertEqual((root/'new-file').read_text(),'keep')
+            self.assertEqual((root/'new-folder'/'nested').read_text(),'nested')
+            self.assertEqual((root/'new-folder').stat().st_mode & 0o777,0o750)
+            self.assertEqual((root/'new-link').readlink(),Path('file'))
+            self.assertEqual((root/'new-dangling').readlink(),Path('missing'))
+
+    def test_missing_libc_rename_function_uses_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'file';source.write_text('keep')
+            with patch('ctypes.CDLL',return_value=SimpleNamespace()):
+                result=app.file_operation(directory,str(source),'rename','new')
+            self.assertEqual(Path(result['path']).read_text(),'keep')
+
+    def test_fallback_destination_created_after_initial_check_is_not_overwritten(self):
+        for kind in ['file','folder','link']:
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source=root/'source';target=root/'target'
+                if kind=='folder': source.mkdir();target.mkdir()
+                elif kind=='link': source.symlink_to('missing');target.symlink_to('other')
+                else: source.write_text('source');target.write_text('target')
+                real_lexists=app.os.path.lexists
+                def stale_check(path): return False if str(path)==str(target) else real_lexists(path)
+                with patch('ctypes.CDLL',return_value=self.unsupported_rename()),patch('os.path.lexists',side_effect=stale_check):
+                    with self.assertRaises(FileExistsError): app.file_operation(directory,str(source),'rename','target')
+                if kind=='file': self.assertEqual(target.read_text(),'target');self.assertEqual(source.read_text(),'source')
+                if kind=='folder': self.assertTrue(source.is_dir());self.assertTrue(target.is_dir())
+                if kind=='link': self.assertEqual(target.readlink(),Path('other'));self.assertTrue(source.is_symlink())
+
+    def test_permission_errors_do_not_trigger_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'source';source.write_text('keep')
+            with patch('ctypes.CDLL',return_value=self.unsupported_rename(errno.EACCES)),patch('os.link') as link,patch('os.mkdir') as mkdir:
+                with self.assertRaises(PermissionError): app.file_operation(directory,str(source),'rename','new')
+                link.assert_not_called();mkdir.assert_not_called()
+            self.assertTrue(source.exists());self.assertFalse((source.parent/'new').exists())
+
+    def test_failed_directory_fallback_removes_only_empty_reservation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir();(source/'file').write_text('keep')
+            with patch('ctypes.CDLL',return_value=self.unsupported_rename()),patch('os.rename',side_effect=PermissionError(errno.EACCES,'denied')):
+                with self.assertRaises(PermissionError): app.file_operation(directory,str(source),'rename','new')
+            self.assertFalse((root/'new').exists());self.assertEqual((source/'file').read_text(),'keep')
+            def populate_then_fail(*args):
+                (root/'new'/'concurrent').write_text('keep concurrent data')
+                raise OSError(errno.ENOTEMPTY,'not empty')
+            with patch('ctypes.CDLL',return_value=self.unsupported_rename()),patch('os.rename',side_effect=populate_then_fail):
+                with self.assertRaises(OSError): app.file_operation(directory,str(source),'rename','new')
+            self.assertEqual((root/'new'/'concurrent').read_text(),'keep concurrent data')
+            self.assertEqual((source/'file').read_text(),'keep')
+
     def test_create_in_current_and_nested_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             folder=app.file_action(dict(side='local',root=directory,path=directory,operation='create_folder',name='资料 folder'))
