@@ -111,6 +111,7 @@ for (const side of sides) {
     connection,
     root: "",
     selected: new Map(),
+    selectionAnchor: null,
     showHidden: saved.showHidden === true,
     paths: saved.paths || {},
     generation: 0,
@@ -663,13 +664,39 @@ function applyHiddenVisibility(side) {
   $(side + "Count").textContent =
     visible + " 个项目" + (hidden ? " · " + hidden + " 项隐藏" : "");
 }
-function select(side, entry, additive = false) {
+function visibleFileRows(side) {
+  const tree = $(side + "Tree");
+  return [...tree.querySelectorAll(".entry")].filter(row => {
+    for (let parent = row; parent && parent !== tree; parent = parent.parentElement)
+      if (parent.hidden) return false;
+    return true;
+  });
+}
+function select(side, entry, additive = false, range = false) {
   focus(side);
-  const selected = panes[side].selected;
+  const p = panes[side], selected = p.selected;
+  if (range && p.selectionAnchor) {
+    const rows = visibleFileRows(side),
+      start = rows.findIndex(row => row.dataset.path === p.selectionAnchor),
+      end = rows.findIndex(row => row.dataset.path === entry.path);
+    if (start >= 0 && end >= 0) {
+      if (!additive) selected.clear();
+      for (const row of rows.slice(Math.min(start, end), Math.max(start, end) + 1))
+        selected.set(row.dataset.path, row.entryData);
+      updateSelection(side);
+      return;
+    }
+  }
   if (!additive) selected.clear();
   if (additive && selected.has(entry.path)) selected.delete(entry.path);
   else selected.set(entry.path, entry);
+  p.selectionAnchor = entry.path;
   updateSelection(side);
+}
+function entryType(entry) {
+  return entry.symlink ? (entry.directory ? "目录链接" : "文件链接")
+    : entry.directory ? "文件夹"
+      : entry.name.includes(".") ? entry.name.split(".").pop().toUpperCase() : "文件";
 }
 function drawEntries(container, list, side) {
   for (const entry of list) {
@@ -678,6 +705,7 @@ function drawEntries(container, list, side) {
     wrap.dataset.hidden = String(entry.name.startsWith("."));
     wrap.hidden = !panes[side].showHidden && entry.name.startsWith(".");
     row.dataset.path = entry.path;
+    row.entryData = entry;
     row.draggable = true;
     row.tabIndex = 0;
     row.setAttribute("role", "treeitem");
@@ -705,15 +733,7 @@ function drawEntries(container, list, side) {
       name,
       node(
         "span",
-        entry.symlink
-          ? entry.directory
-            ? "目录链接"
-            : "文件链接"
-          : entry.directory
-            ? "文件夹"
-            : entry.name.split(".").length > 1
-              ? entry.name.split(".").pop().toUpperCase()
-              : "文件",
+        entryType(entry),
         "entry-type",
       ),
       node(
@@ -724,11 +744,24 @@ function drawEntries(container, list, side) {
     );
     wrap.append(row);
     container.append(wrap);
+    row.updateEntry = (next) => {
+      Object.assign(entry, next);
+      name.lastElementChild.textContent = entry.name + (entry.symlink ? " ↗" : "");
+      row.querySelector(".entry-type").textContent = entryType(entry);
+      row.querySelector(".entry-size").textContent = entry.directory ? "—" : formatSize(entry.size);
+      wrap.dataset.hidden = String(entry.name.startsWith("."));
+      wrap.hidden = !panes[side].showHidden && entry.name.startsWith(".");
+      if (panes[side].selected.has(entry.path)) panes[side].selected.set(entry.path, entry);
+    };
     row.onclick = (event) => {
       if (event.button !== 0) return;
       if (entry.directory) {
         if (event.detail <= 1)
-          select(side, entry, event.metaKey || event.ctrlKey);
+          select(side, entry, event.metaKey || event.ctrlKey, event.shiftKey);
+        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+          cancelFolderClick();
+          return;
+        }
         handleFolderClick(
           row,
           () => action(null, toggleFolder),
@@ -737,12 +770,12 @@ function drawEntries(container, list, side) {
       } else {
         cancelFolderClick();
         if (event.detail <= 1)
-          select(side, entry, event.metaKey || event.ctrlKey);
+          select(side, entry, event.metaKey || event.ctrlKey, event.shiftKey);
       }
     };
     row.onselectstart = (event) => event.preventDefault();
     row.onmousedown = (event) => {
-      if (event.button === 0 && event.detail > 1) event.preventDefault();
+      if (event.button === 0 && (event.detail > 1 || event.shiftKey)) event.preventDefault();
     };
     row.oncontextmenu = (event) => {
       event.preventDefault();
@@ -754,7 +787,7 @@ function drawEntries(container, list, side) {
       if (event.target !== row) return;
       if (event.key === " ") {
         event.preventDefault();
-        select(side, entry, event.metaKey || event.ctrlKey);
+        select(side, entry, event.metaKey || event.ctrlKey, event.shiftKey);
       }
       if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
         event.preventDefault();
@@ -803,25 +836,24 @@ function drawEntries(container, list, side) {
       children.hidden = true;
       const generation = panes[side].generation;
       wrap.append(children);
-      let loaded = false,
-        opened = false;
+      let loaded = false, opened = false, request = 0;
+      row.refreshFolder = async () => {
+        const current = ++request, refreshId = panes[side].treeRefreshId;
+        const info = await browse(side, entry.path);
+        if (!row.isConnected || generation !== panes[side].generation || current !== request || refreshId !== panes[side].treeRefreshId) return;
+        reconcileEntries(children, info.entries.map(child => ({
+          ...child, path: entry.path.replace(/\/$/, "") + "/" + child.name,
+        })), side);
+        loaded = true;
+      };
+      row.invalidateFolder = () => { loaded = false; request++; };
       toggleFolder = async () => {
         if (toggle.disabled) return;
         try {
           if (!loaded) {
             toggle.disabled = true;
-            const info = await browse(side, entry.path);
-            if (!row.isConnected || generation !== panes[side].generation)
-              return;
-            drawEntries(
-              children,
-              info.entries.map((child) => ({
-                ...child,
-                path: entry.path.replace(/\/$/, "") + "/" + child.name,
-              })),
-              side,
-            );
-            loaded = true;
+            await row.refreshFolder();
+            if (!loaded || !row.isConnected || generation !== panes[side].generation) return;
           }
           opened = !opened;
           children.hidden = !opened;
@@ -856,10 +888,57 @@ function drawEntries(container, list, side) {
     }
   }
 }
+function reconcileEntries(container, list, side) {
+  const p = panes[side], existing = new Map();
+  const remove = (wrap) => {
+    for (const row of wrap.querySelectorAll(".entry")) {
+      p.selected.delete(row.dataset.path);
+      if (p.selectionAnchor === row.dataset.path) p.selectionAnchor = null;
+    }
+    wrap.remove();
+  };
+  for (const wrap of [...container.children]) {
+    const row = wrap.firstElementChild;
+    if (wrap.classList.contains("entry-wrapper")) existing.set(row.dataset.path, wrap);
+    else wrap.remove();
+  }
+  const incoming = new Set(list.map(entry => entry.path));
+  for (const [path, wrap] of existing) {
+    if (!incoming.has(path)) {
+      remove(wrap);
+      existing.delete(path);
+    }
+  }
+  let cursor = container.firstElementChild;
+  for (const entry of list) {
+    let wrap = existing.get(entry.path);
+    existing.delete(entry.path);
+    if (wrap && wrap.firstElementChild.entryData.directory !== entry.directory) {
+      if (cursor === wrap) cursor = wrap.nextElementSibling;
+      remove(wrap);
+      wrap = null;
+    }
+    if (wrap) wrap.firstElementChild.updateEntry(entry);
+    else {
+      const temporary = node("div");
+      drawEntries(temporary, [entry], side);
+      wrap = temporary.firstElementChild;
+    }
+    if (wrap === cursor) cursor = cursor.nextElementSibling;
+    else container.insertBefore(wrap, cursor);
+  }
+  for (const wrap of existing.values()) remove(wrap);
+  if (!list.length && container === $(side + "Tree")) {
+    const box = node("div", undefined, "empty");
+    box.append(icon("folder"), node("strong", "文件夹为空"));
+    container.append(box);
+  }
+}
 let pendingFileAction = null;
 function showFileMenu(event, side, entry, toggleFolder) {
   closeMenus();
-  if (entry) select(side, entry);
+  if (entry && event.shiftKey) select(side, entry, false, true);
+  else if (entry && !panes[side].selected.has(entry.path)) select(side, entry);
   else focus(side);
   const menu = $("fileMenu");
   menu.replaceChildren();
@@ -890,8 +969,9 @@ function showFileMenu(event, side, entry, toggleFolder) {
   });
   if (entry) {
     add("打包", packSelection);
-    add("重命名", () => openFileAction(side, entry, "rename"));
-    add("删除…", () => openFileAction(side, entry, "trash"), true);
+    const count = panes[side].selected.size;
+    if (count <= 1) add("重命名", () => openFileAction(side, entry, "rename"));
+    add(count > 1 ? "删除 " + count + " 项…" : "删除…", () => openFileAction(side, entry, "trash"), true);
   }
   menu.hidden = false;
   menu.style.left =
@@ -905,9 +985,12 @@ function showFileMenu(event, side, entry, toggleFolder) {
 function openFileAction(side, entry, operation) {
   const p = panes[side];
   const creating = operation === "create_folder" || operation === "create_file";
+  const entries = operation === "trash" && p.selected.has(entry.path)
+    ? [...p.selected.values()].map(item => ({...item})) : [entry];
   pendingFileAction = {
     side,
     entry,
+    entries,
     operation,
     key: endpointKey(side),
     root: p.root,
@@ -916,8 +999,8 @@ function openFileAction(side, entry, operation) {
   };
   $("fileActionTitle").textContent =
     creating ? (operation === "create_folder" ? "新建文件夹" : "新建文件")
-      : operation === "rename" ? "重命名" : "删除项目";
-  $("fileActionPath").textContent = entry.path;
+      : operation === "rename" ? "重命名" : "删除 " + entries.length + " 项";
+  $("fileActionPath").textContent = operation === "trash" ? entries.map(item => item.path).join("\n") : entry.path;
   $("renameField").hidden = operation === "trash";
   $("newFilename").required = operation !== "trash";
   $("newFilename").value = creating ? "" : entry.name;
@@ -931,12 +1014,23 @@ function openFileAction(side, entry, operation) {
   }
 }
 async function refreshFileTree(side, revealDirectory) {
-  const tree = $(side + "Tree"), root = panes[side].root;
-  const expanded = new Set(
-    [...tree.querySelectorAll('.entry')]
-      .filter(row => row.querySelector('[aria-expanded="true"]'))
-      .map(row => row.dataset.path),
-  );
+  const p = panes[side], tree = $(side + "Tree"), root = p.root,
+    generation = p.generation, key = endpointKey(side),
+    request = p.treeRefreshId = (p.treeRefreshId || 0) + 1;
+  if (!root || p.loadedKey !== key) return;
+  const valid = () => generation === p.generation && key === endpointKey(side) && request === p.treeRefreshId;
+  const scrollTop = tree.scrollTop, bounds = tree.getBoundingClientRect();
+  const anchors = visibleFileRows(side).map(row => ({row, rect: row.getBoundingClientRect()}))
+    .filter(item => item.rect.bottom > bounds.top && item.rect.top < bounds.bottom);
+  const info = await browse(side, root);
+  if (!valid()) return;
+  p.entries = info.entries;
+  reconcileEntries(tree, info.entries, side);
+  const expanded = new Set();
+  for (const row of tree.querySelectorAll(".entry")) {
+    if (row.querySelector('[aria-expanded="true"]')) expanded.add(row.dataset.path);
+    else row.invalidateFolder?.();
+  }
   if (revealDirectory?.startsWith(root.replace(/\/$/, "") + "/")) {
     let path = revealDirectory;
     while (path !== root) {
@@ -944,16 +1038,21 @@ async function refreshFileTree(side, revealDirectory) {
       path = path.slice(0, path.lastIndexOf("/")) || "/";
     }
   }
-  const scrollTop = tree.scrollTop;
-  const generation = panes[side].generation + 1, key = endpointKey(side);
-  await load(side, root, true);
-  if (generation !== panes[side].generation || key !== endpointKey(side)) return;
-  for (const path of [...expanded].sort((a, b) => a.length - b.length)) {
-    if (generation !== panes[side].generation) return;
-    const row = [...tree.querySelectorAll('.entry')].find(row => row.dataset.path === path);
-    if (row?.expandFolder) await row.expandFolder();
+  try {
+    for (const path of [...expanded].sort((a, b) => a.length - b.length)) {
+      if (!valid()) return;
+      const row = [...tree.querySelectorAll('.entry')].find(row => row.dataset.path === path);
+      if (row?.refreshFolder) await row.refreshFolder();
+      if (row?.expandFolder) await row.expandFolder();
+    }
+  } finally {
+    if (valid()) {
+      applyHiddenVisibility(side);
+      tree.scrollTop = scrollTop;
+      const anchor = anchors.find(item => item.row.isConnected);
+      if (anchor) tree.scrollTop += anchor.row.getBoundingClientRect().top - anchor.rect.top;
+    }
   }
-  tree.scrollTop = scrollTop;
 }
 $("fileActionForm").onsubmit = (event) => {
   event.preventDefault();
@@ -970,6 +1069,7 @@ $("fileActionForm").onsubmit = (event) => {
       path: task.entry.path,
       operation: task.operation,
       name: $("newFilename").value,
+      paths: task.operation === "trash" ? task.entries.map(item => item.path) : undefined,
     });
     $("fileActionDialog").close();
     pendingFileAction = null;
@@ -978,7 +1078,7 @@ $("fileActionForm").onsubmit = (event) => {
         ? "已重命名"
         : task.operation === "create_folder" ? "已创建文件夹"
         : task.operation === "create_file" ? "已创建文件"
-        : "已移入回收文件夹：" + result.path,
+        : "已移入回收文件夹 " + result.trashed.length + " 项",
     );
     for (const side of sides) {
       const q = panes[side];
@@ -990,6 +1090,7 @@ $("fileActionForm").onsubmit = (event) => {
       )
         await refreshFileTree(side, task.operation.startsWith("create_") ? task.entry.path : null);
     }
+    if (result.error) throw Error("已处理 " + result.trashed.length + " 项，其余未删除：" + result.error);
   });
 };
 document.addEventListener("pointerdown", (event) => {
@@ -1049,6 +1150,8 @@ async function load(side, path, background = false) {
   p.paths[key] = info.path;
   p.entries = info.entries;
   p.selected.clear();
+  p.selectionAnchor = null;
+  p.treeRefreshId = (p.treeRefreshId || 0) + 1;
   $(side + "Tree").replaceChildren();
   drawEntries($(side + "Tree"), info.entries, side);
   applyHiddenVisibility(side);
@@ -1084,7 +1187,8 @@ for (const side of sides) {
     );
   $(side + "Refresh").onclick = () =>
     action($(side + "Refresh"), () =>
-      load(side, panes[side].root || $(side + "Path").value),
+      panes[side].root && panes[side].loadedKey === endpointKey(side)
+        ? refreshFileTree(side) : load(side, $(side + "Path").value),
     );
   $(side + "Path").onkeydown = (event) => {
     if (event.key === "Enter") action(null, () => load(side));
@@ -2028,7 +2132,7 @@ async function refresh() {
               ? "local"
               : job.side || "local");
         if (panes[side]?.root)
-          action(null, () => load(side, panes[side].root, true));
+          action(null, () => refreshFileTree(side));
       }
       lastJobStates.set(job.id, job.state);
     }

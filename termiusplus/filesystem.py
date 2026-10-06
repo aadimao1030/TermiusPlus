@@ -156,6 +156,36 @@ def file_operation(root, path, operation, name=None, destination=None):
         return dict(path=target, original=path)
     raise ValueError('不支持的文件操作')
 
+def trash_entries(root, paths):
+    """Validate a selection before recoverable deletion; report partial failures."""
+    import os
+    root = os.path.abspath(os.path.expanduser(root))
+    if not isinstance(paths, list) or not 1 <= len(paths) <= 500:
+        raise ValueError('请选择 1–500 个项目删除')
+    selected = set()
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            raise ValueError('删除路径不正确')
+        path = os.path.abspath(os.path.expanduser(path))
+        if path == root or os.path.commonpath([root, path]) != root:
+            raise ValueError('只能操作当前目录内的项目')
+        if not os.path.lexists(path):
+            raise ValueError('项目已不存在，请刷新目录')
+        selected.add(path)
+    selected = sorted(path for path in selected if not any(
+        path.startswith(parent.rstrip('/') + '/') for parent in selected if parent != path))
+    for path in selected:
+        trash = os.path.join(os.path.dirname(path), '.termiusplus-trash')
+        if os.path.lexists(trash) and (os.path.islink(trash) or not os.path.isdir(trash)):
+            raise ValueError('回收目录不是普通文件夹，无法安全删除')
+    trashed = []
+    for path in selected:
+        try:
+            trashed.append(file_operation(root, path, 'trash'))
+        except Exception as error:
+            return dict(trashed=trashed, failed=path, error=str(error))
+    return dict(trashed=trashed)
+
 def move_entries(root, paths, destination):
     """Preflight an entire selection before moving; report any partial failure."""
     import os, stat

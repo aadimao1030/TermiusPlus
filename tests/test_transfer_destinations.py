@@ -31,6 +31,7 @@ const renderJobs = () => {};
 const notice = () => {};
 const loads = [];
 const load = async (side,path) => loads.push([side,path]);
+const refreshFileTree = async side => loads.push([side,panes[side].root]);
 const action = async (button, callback) => callback();
 const api = async (path, options) => {
   if (path === 'status') return {jobs, home:'/home', rsync:{ok:true}};

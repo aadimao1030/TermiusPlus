@@ -26,7 +26,7 @@ from . import remote_tasks
 from . import route_probe, scheduler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from .filesystem import file_preview, file_operation, move_entries, local_info
+from .filesystem import file_preview, file_operation, move_entries, trash_entries, local_info
 from .ssh import validate_route, ssh_args, ssh_env
 
 BASE = Path(__file__).resolve().parent.parent
@@ -109,6 +109,7 @@ def remote_preview(route, path):
 
 REMOTE_FILE_OPERATION_SCRIPT = inspect.getsource(file_operation) + "\nimport json,sys\nprint(json.dumps(file_operation(**json.loads(sys.argv[1])),ensure_ascii=True))\n"
 REMOTE_FILE_MOVE_SCRIPT = inspect.getsource(file_operation) + '\n' + inspect.getsource(move_entries) + "\nimport json,sys\nprint(json.dumps(move_entries(**json.loads(sys.argv[1])),ensure_ascii=True))\n"
+REMOTE_FILE_TRASH_SCRIPT = inspect.getsource(file_operation) + '\n' + inspect.getsource(trash_entries) + "\nimport json,sys\nprint(json.dumps(trash_entries(**json.loads(sys.argv[1])),ensure_ascii=True))\n"
 
 
 def file_action(data):
@@ -116,15 +117,18 @@ def file_action(data):
     if not all(isinstance(values[key], str) and values[key] for key in ('root', 'path', 'operation')):
         raise ValueError('文件操作参数不完整')
     moving = values['operation'] == 'move'
-    operation = move_entries if moving else file_operation
+    batch_trash = values['operation'] == 'trash' and data.get('paths') is not None
+    operation = move_entries if moving else trash_entries if batch_trash else file_operation
     if moving:
         values = {key: data.get(key) for key in ('root', 'paths', 'destination')}
+    elif batch_trash:
+        values = {key: data.get(key) for key in ('root', 'paths')}
     if data.get('side') == 'local':
         return operation(**values)
     if data.get('side') != 'remote':
         raise ValueError('文件位置不正确')
     route = validate_route(data['route'])
-    script = REMOTE_FILE_MOVE_SCRIPT if moving else REMOTE_FILE_OPERATION_SCRIPT
+    script = REMOTE_FILE_MOVE_SCRIPT if moving else REMOTE_FILE_TRASH_SCRIPT if batch_trash else REMOTE_FILE_OPERATION_SCRIPT
     command = 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(json.dumps(values))
     result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25, env=ssh_env(route))
     if result.returncode:

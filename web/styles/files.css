@@ -1634,6 +1634,9 @@ body {
 }
 #fileActionPath {
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 /* Warm graphite surfaces keep the file trees prominent and controls quiet. */

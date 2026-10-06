@@ -165,7 +165,8 @@ class FileActionTests(unittest.TestCase):
 class FileMenuTests(unittest.TestCase):
     def test_menu_targets_dialog_submission_and_expanded_tree_refresh(self):
         source=(Path(__file__).resolve().parents[1]/'web/scripts/files.js').read_text()
-        helpers=source[source.index('let pendingFileAction = null;'):source.index('document.addEventListener("pointerdown", (event) => {',source.index('let pendingFileAction = null;'))]
+        helpers=source[source.index('let pendingFileAction = null;'):source.index('async function refreshFileTree(')]
+        helpers+=source[source.index('$("fileActionForm").onsubmit'):source.index('document.addEventListener("pointerdown", (event) => {',source.index('let pendingFileAction = null;'))]
         script=r'''
 const assert = require('node:assert/strict');
 const elements = new Map();
@@ -177,20 +178,16 @@ const $ = id => {
 };
 const node=(_,text)=>({text,setAttribute(){},focus(){}});
 const innerWidth=1000,innerHeight=800,sides=['local'];
-const panes={local:{kind:'remote',root:'/root',loadedKey:'server',generation:0,connection:{host:'fixture'}}};
+const panes={local:{kind:'remote',root:'/root',loadedKey:'server',generation:0,connection:{host:'fixture'},selected:new Map()}};
 const endpointKey=()=> 'server';
-const closeMenus=()=>{}; const focus=()=>{}; const select=()=>{};
+const closeMenus=()=>{}; const focus=()=>{};
+const select=(side,entry)=>{panes[side].selected.clear();panes[side].selected.set(entry.path,entry)};
 const previewFile=()=>{}; const packSelection=()=>{};
 const notice=()=>{}; const navigator={clipboard:{writeText:async()=>{}}};
 const action=(_,callback)=>callback();
-let request, opened=[];
-const api=async(_,data)=>{request=data;return {path:data.path+'/'+data.name}};
-const makeRow=path=>({dataset:{path},querySelector:()=>true,
-  expandFolder:async()=>{opened.push(path);rows.push(makeRow(path+'/child'))}});
-let rows=[makeRow('/root/folder'),makeRow('/root/folder/child')];
-$('localTree').querySelectorAll=()=> rows;
-$('localTree').scrollTop=80;
-const load=async()=>{panes.local.generation++; rows=[makeRow('/root/folder')];$('localTree').scrollTop=0};
+let request, refreshes=[];
+const api=async(_,data)=>{request=data;return {path:data.path+'/'+data.name,trashed:data.paths?.map(path=>({original:path,path:'/trash'}))}};
+const refreshFileTree=async(side,path)=>refreshes.push([side,path]);
 ''' + helpers + r'''
 (async()=>{
   const event={clientX:10,clientY:10};
@@ -210,8 +207,7 @@ const load=async()=>{panes.local.generation++; rows=[makeRow('/root/folder')];$(
   assert.equal(request.operation,'create_folder');
   assert.equal(request.side,'remote');
   assert.equal(request.route.host,'fixture');
-  assert.deepEqual(opened,['/root/folder','/root/folder/child']);
-  assert.equal($('localTree').scrollTop,80);
+  assert.deepEqual(refreshes,[['local','/root']]);
   showFileMenu(event,'local',{directory:true,path:'/root/folder/child',name:'child'},()=>{});
   $('fileMenu').children[1].onclick();
   assert.equal($('fileActionPath').textContent,'/root/folder/child');
@@ -231,6 +227,16 @@ const load=async()=>{panes.local.generation++; rows=[makeRow('/root/folder')];$(
   openFileAction('local',{path:'/root/a',name:'a'},'trash');
   assert.equal($('renameField').hidden,true);
   assert.equal($('newFilename').required,false);
+  const first={path:'/root/a',name:'a'},last={path:'/root/b',name:'b'};
+  panes.local.selected=new Map([[first.path,first],[last.path,last]]);
+  showFileMenu(event,'local',last);
+  assert.equal(panes.local.selected.size,2,'right click retains the selected range');
+  assert.equal($('fileMenu').children.some(b=>b.text==='重命名'),false);
+  $('fileMenu').children.find(b=>b.text==='删除 2 项…').onclick();
+  assert.equal($('fileActionTitle').textContent,'删除 2 项');
+  await $('fileActionForm').onsubmit({preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(request.paths,['/root/a','/root/b']);
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''
         result=subprocess.run(['node','-e',script],capture_output=True,text=True)
