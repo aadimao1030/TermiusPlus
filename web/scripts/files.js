@@ -745,6 +745,7 @@ function drawEntries(container, list, side) {
     };
     row.oncontextmenu = (event) => {
       event.preventDefault();
+      event.stopPropagation();
       cancelFolderClick();
       showFileMenu(event, side, entry, toggleFolder);
     };
@@ -820,6 +821,9 @@ function drawEntries(container, list, side) {
         event.stopPropagation();
         if (event.detail <= 1) action(null, toggleFolder);
       };
+      row.expandFolder = async () => {
+        if (!opened) await toggleFolder();
+      };
       row.ondragover = (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -839,7 +843,8 @@ function drawEntries(container, list, side) {
 let pendingFileAction = null;
 function showFileMenu(event, side, entry, toggleFolder) {
   closeMenus();
-  select(side, entry);
+  if (entry) select(side, entry);
+  else focus(side);
   const menu = $("fileMenu");
   menu.replaceChildren();
   const add = (label, callback, danger = false) => {
@@ -851,17 +856,27 @@ function showFileMenu(event, side, entry, toggleFolder) {
     };
     menu.append(button);
   };
-  if (entry.directory) {
+  const directory = entry?.directory
+    ? entry.path
+    : entry
+      ? entry.path.slice(0, entry.path.lastIndexOf("/")) || "/"
+      : panes[side].root;
+  const parent = {path: directory, name: ""};
+  add("新建文件夹…", () => openFileAction(side, parent, "create_folder"));
+  add("新建文件…", () => openFileAction(side, parent, "create_file"));
+  if (entry?.directory) {
     add("展开 / 收起", toggleFolder);
     add("进入文件夹", () => load(side, entry.path));
-  } else add("预览", () => previewFile(side, entry));
+  } else if (entry) add("预览", () => previewFile(side, entry));
   add("复制路径", async () => {
-    await navigator.clipboard.writeText(entry.path);
+    await navigator.clipboard.writeText(entry ? entry.path : directory);
     notice("已复制路径");
   });
-  add("打包", packSelection);
-  add("重命名", () => openFileAction(side, entry, "rename"));
-  add("删除…", () => openFileAction(side, entry, "trash"), true);
+  if (entry) {
+    add("打包", packSelection);
+    add("重命名", () => openFileAction(side, entry, "rename"));
+    add("删除…", () => openFileAction(side, entry, "trash"), true);
+  }
   menu.hidden = false;
   menu.style.left =
     Math.max(4, Math.min(event.clientX, innerWidth - menu.offsetWidth - 4)) +
@@ -873,6 +888,7 @@ function showFileMenu(event, side, entry, toggleFolder) {
 }
 function openFileAction(side, entry, operation) {
   const p = panes[side];
+  const creating = operation === "create_folder" || operation === "create_file";
   pendingFileAction = {
     side,
     entry,
@@ -883,19 +899,45 @@ function openFileAction(side, entry, operation) {
     route: p.connection,
   };
   $("fileActionTitle").textContent =
-    operation === "rename" ? "重命名" : "删除项目";
+    creating ? (operation === "create_folder" ? "新建文件夹" : "新建文件")
+      : operation === "rename" ? "重命名" : "删除项目";
   $("fileActionPath").textContent = entry.path;
-  $("renameField").hidden = operation !== "rename";
-  $("newFilename").required = operation === "rename";
-  $("newFilename").value = entry.name;
+  $("renameField").hidden = operation === "trash";
+  $("newFilename").required = operation !== "trash";
+  $("newFilename").value = creating ? "" : entry.name;
   $("deleteNote").hidden = operation !== "trash";
   $("confirmFileAction").textContent =
-    operation === "rename" ? "保存" : "移入回收文件夹";
+    creating ? "创建" : operation === "rename" ? "保存" : "移入回收文件夹";
   $("fileActionDialog").showModal();
-  if (operation === "rename") {
+  if (operation !== "trash") {
     $("newFilename").focus();
     $("newFilename").select();
   }
+}
+async function refreshFileTree(side, revealDirectory) {
+  const tree = $(side + "Tree"), root = panes[side].root;
+  const expanded = new Set(
+    [...tree.querySelectorAll('.entry')]
+      .filter(row => row.querySelector('[aria-expanded="true"]'))
+      .map(row => row.dataset.path),
+  );
+  if (revealDirectory?.startsWith(root.replace(/\/$/, "") + "/")) {
+    let path = revealDirectory;
+    while (path !== root) {
+      expanded.add(path);
+      path = path.slice(0, path.lastIndexOf("/")) || "/";
+    }
+  }
+  const scrollTop = tree.scrollTop;
+  const generation = panes[side].generation + 1, key = endpointKey(side);
+  await load(side, root, true);
+  if (generation !== panes[side].generation || key !== endpointKey(side)) return;
+  for (const path of [...expanded].sort((a, b) => a.length - b.length)) {
+    if (generation !== panes[side].generation) return;
+    const row = [...tree.querySelectorAll('.entry')].find(row => row.dataset.path === path);
+    if (row?.expandFolder) await row.expandFolder();
+  }
+  tree.scrollTop = scrollTop;
 }
 $("fileActionForm").onsubmit = (event) => {
   event.preventDefault();
@@ -918,6 +960,8 @@ $("fileActionForm").onsubmit = (event) => {
     notice(
       task.operation === "rename"
         ? "已重命名"
+        : task.operation === "create_folder" ? "已创建文件夹"
+        : task.operation === "create_file" ? "已创建文件"
         : "已移入回收文件夹：" + result.path,
     );
     for (const side of sides) {
@@ -928,7 +972,7 @@ $("fileActionForm").onsubmit = (event) => {
         (q.kind === "local" ||
           JSON.stringify(q.connection) === JSON.stringify(task.route))
       )
-        await load(side, q.root, true);
+        await refreshFileTree(side, task.operation.startsWith("create_") ? task.entry.path : null);
     }
   });
 };
@@ -1011,6 +1055,12 @@ async function load(side, path, background = false) {
 }
 for (const side of sides) {
   $(side + "Pane").onpointerdown = () => focus(side);
+  $(side + "Tree").oncontextmenu = (event) => {
+    event.preventDefault();
+    cancelFolderClick();
+    if (panes[side].root && panes[side].loadedKey === endpointKey(side))
+      showFileMenu(event, side, null);
+  };
   $("load" + (side === "local" ? "Local" : "Remote")).onclick = () =>
     action($("load" + (side === "local" ? "Local" : "Remote")), () =>
       load(side),

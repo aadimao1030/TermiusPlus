@@ -46,18 +46,34 @@ def file_preview(path):
         return dict(result, kind='text', content=text, encoding=encoding, truncated=truncated)
 
 def file_operation(root, path, operation, name=None):
-    """Rename entries without replacement, or move them into recoverable trash."""
+    """Create or rename without replacement, or move entries into recoverable trash."""
     import os, uuid, ctypes, sys
     root = os.path.abspath(os.path.expanduser(root))
     path = os.path.abspath(os.path.expanduser(path))
-    if path == root or os.path.commonpath([root, path]) != root:
+    creating = operation in ('create_file', 'create_folder')
+    if (path == root and not creating) or os.path.commonpath([root, path]) != root:
         raise ValueError('只能操作当前目录内的项目')
+    if creating or operation == 'rename':
+        if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\0' in name:
+            raise ValueError('名称不能为空，也不能包含 / 或空字符')
+    if creating:
+        if not os.path.isdir(path):
+            raise ValueError('目标文件夹已不存在，请刷新目录')
+        target = os.path.join(path, name)
+        try:
+            if operation == 'create_folder':
+                os.mkdir(target)
+            else:
+                # Exclusive creation also rejects existing or dangling symlinks.
+                with open(target, 'xb'):
+                    pass
+        except FileExistsError:
+            raise ValueError('同名项目已存在，不会覆盖')
+        return dict(path=target)
     if not os.path.lexists(path):
         raise ValueError('项目已不存在，请刷新目录')
     parent, basename = os.path.split(path)
     if operation == 'rename':
-        if not isinstance(name, str) or name in ('', '.', '..') or '/' in name or '\0' in name:
-            raise ValueError('名称不能为空，也不能包含 / 或空字符')
         target = os.path.join(parent, name)
         if target == path:
             return dict(path=target)

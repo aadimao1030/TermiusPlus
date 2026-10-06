@@ -4,10 +4,55 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+import shlex
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app
 
 class FileActionTests(unittest.TestCase):
+    def test_create_in_current_and_nested_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder=app.file_action(dict(side='local',root=directory,path=directory,operation='create_folder',name='资料 folder'))
+            result=app.file_action(dict(side='local',root=directory,path=folder['path'],operation='create_file',name="中文 ' $(id).txt"))
+            self.assertTrue(Path(folder['path']).is_dir())
+            self.assertEqual(Path(result['path']).read_bytes(),b'')
+
+    def test_create_never_overwrites_entries_or_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'file').write_text('keep');(root/'folder').mkdir()
+            (root/'link').symlink_to(root/'file');(root/'dangling').symlink_to(root/'missing')
+            for operation in ['create_file','create_folder']:
+                for name in ['file','folder','link','dangling']:
+                    with self.assertRaisesRegex(ValueError,'同名'):
+                        app.file_operation(directory,directory,operation,name)
+            self.assertEqual((root/'file').read_text(),'keep')
+            self.assertTrue((root/'dangling').is_symlink())
+            self.assertFalse((root/'missing').exists())
+
+    def test_create_rejects_invalid_names_and_locations(self):
+        with tempfile.TemporaryDirectory() as directory,tempfile.TemporaryDirectory() as other:
+            root=Path(directory);(root/'file').write_text('keep')
+            for operation in ['create_file','create_folder']:
+                for name in ['', '.', '..', '../escape', 'sub/name', 'bad\0name', None]:
+                    with self.assertRaises(ValueError): app.file_operation(directory,directory,operation,name)
+                for path in [other,str(root/'missing'),str(root/'file')]:
+                    with self.assertRaises(ValueError): app.file_operation(directory,path,operation,'new')
+            self.assertEqual(list(Path(other).iterdir()),[])
+
+    def test_remote_api_creates_through_generated_ssh_command(self):
+        # Run the actual generated remote Python command with an isolated transport.
+        with tempfile.TemporaryDirectory() as directory:
+            real_run = subprocess.run
+            def transport(command, **kwargs):
+                return real_run(shlex.split(command[-1]),**kwargs)
+            with patch('app.ssh_args',return_value=['ssh']),patch('app.ssh_env',return_value=None),patch('app.subprocess.run',side_effect=transport):
+                data=dict(side='remote',route=dict(host='fixture'),root=directory,path=directory,operation='create_folder',name='folder name')
+                folder=app.file_action(data)
+                data.update(path=folder['path'],operation='create_file',name="空白 ' $(id).txt")
+                result=app.file_action(data)
+            self.assertTrue(Path(folder['path']).is_dir())
+            self.assertEqual(Path(result['path']).read_bytes(),b'')
+
     def test_rename_and_collision_preserve_both_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'a';source.write_text('original');target=root/'b';target.write_text('keep')
@@ -46,3 +91,78 @@ class FileActionTests(unittest.TestCase):
             root=Path(directory);(root/'.termiusplus-trash').symlink_to(other,target_is_directory=True);file=root/'file';file.write_text('keep')
             with self.assertRaises(ValueError):app.file_operation(directory,str(file),'trash')
             self.assertTrue(file.exists())
+
+
+class FileMenuTests(unittest.TestCase):
+    def test_menu_targets_dialog_submission_and_expanded_tree_refresh(self):
+        source=(Path(__file__).resolve().parents[1]/'web/scripts/files.js').read_text()
+        helpers=source[source.index('let pendingFileAction = null;'):source.index('document.addEventListener("pointerdown", (event) => {',source.index('let pendingFileAction = null;'))]
+        script=r'''
+const assert = require('node:assert/strict');
+const elements = new Map();
+const $ = id => {
+  if (!elements.has(id)) elements.set(id, {children:[],style:{},offsetWidth:180,offsetHeight:280,
+    replaceChildren(){this.children=[]},append(button){this.children.push(button)},
+    querySelector(){return this.children[0]},focus(){},select(){},showModal(){this.open=true},close(){this.open=false}});
+  return elements.get(id);
+};
+const node=(_,text)=>({text,setAttribute(){},focus(){}});
+const innerWidth=1000,innerHeight=800,sides=['local'];
+const panes={local:{kind:'remote',root:'/root',loadedKey:'server',generation:0,connection:{host:'fixture'}}};
+const endpointKey=()=> 'server';
+const closeMenus=()=>{}; const focus=()=>{}; const select=()=>{};
+const previewFile=()=>{}; const packSelection=()=>{};
+const notice=()=>{}; const navigator={clipboard:{writeText:async()=>{}}};
+const action=(_,callback)=>callback();
+let request, opened=[];
+const api=async(_,data)=>{request=data;return {path:data.path+'/'+data.name}};
+const makeRow=path=>({dataset:{path},querySelector:()=>true,
+  expandFolder:async()=>{opened.push(path);rows.push(makeRow(path+'/child'))}});
+let rows=[makeRow('/root/folder'),makeRow('/root/folder/child')];
+$('localTree').querySelectorAll=()=> rows;
+$('localTree').scrollTop=80;
+const load=async()=>{panes.local.generation++; rows=[makeRow('/root/folder')];$('localTree').scrollTop=0};
+''' + helpers + r'''
+(async()=>{
+  const event={clientX:10,clientY:10};
+  showFileMenu(event,'local',null);
+  assert.deepEqual($('fileMenu').children.map(b=>b.text),['新建文件夹…','新建文件…','复制路径']);
+  $('fileMenu').children[0].onclick();
+  assert.equal($('fileActionTitle').textContent,'新建文件夹');
+  assert.equal($('fileActionPath').textContent,'/root');
+  assert.equal($('newFilename').value,'');
+  assert.equal($('newFilename').required,true);
+  assert.equal($('deleteNote').hidden,true);
+  $('newFilename').value='new folder';
+  await $('fileActionForm').onsubmit({preventDefault(){}});
+  // The submit handler starts an asynchronous action; allow its refresh to finish.
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(request.path,'/root');
+  assert.equal(request.operation,'create_folder');
+  assert.equal(request.side,'remote');
+  assert.equal(request.route.host,'fixture');
+  assert.deepEqual(opened,['/root/folder','/root/folder/child']);
+  assert.equal($('localTree').scrollTop,80);
+  showFileMenu(event,'local',{directory:true,path:'/root/folder/child',name:'child'},()=>{});
+  $('fileMenu').children[1].onclick();
+  assert.equal($('fileActionPath').textContent,'/root/folder/child');
+  assert.equal($('fileActionTitle').textContent,'新建文件');
+  assert.equal($('newFilename').value,'');
+  $('newFilename').value='empty.txt';
+  await $('fileActionForm').onsubmit({preventDefault(){}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(request.path,'/root/folder/child');
+  assert.equal(request.operation,'create_file');
+  showFileMenu(event,'local',{directory:false,path:'/root/folder/a.txt',name:'a.txt'});
+  $('fileMenu').children[0].onclick();
+  assert.equal($('fileActionPath').textContent,'/root/folder');
+  openFileAction('local',{path:'/root/a',name:'a'},'rename');
+  assert.equal($('newFilename').value,'a');
+  assert.equal($('confirmFileAction').textContent,'保存');
+  openFileAction('local',{path:'/root/a',name:'a'},'trash');
+  assert.equal($('renameField').hidden,true);
+  assert.equal($('newFilename').required,false);
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+        result=subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
