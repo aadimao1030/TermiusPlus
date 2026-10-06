@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id),
   appOrigin = new URL(document.baseURI).origin,
   token = () => fragment.split("?")[0],
   mime = "application/x-termiusplus-items";
+let draggedItems = null;
 const sides = ["local", "remote"],
   sideName = (side) => (side === "local" ? "左栏" : "右栏");
 const node = (tag, text, cls) => {
@@ -629,7 +630,7 @@ function updateSelection(side) {
   const p = panes[side];
   $(side + "Selected").textContent = p.selected.size
     ? "已选 " + p.selected.size + " 项"
-    : "可拖到另一栏";
+    : "同机拖放移动 · 跨机拖放传输";
   $(side + "Selected").classList.toggle("selection-text", p.selected.size > 0);
   document.querySelectorAll("#" + side + "Tree .entry").forEach((row) => {
     const chosen = p.selected.has(row.dataset.path);
@@ -770,18 +771,33 @@ function drawEntries(container, list, side) {
     let toggleFolder = async () => {};
     row.ondragstart = (event) => {
       if (!panes[side].selected.has(entry.path)) select(side, entry);
-      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.effectAllowed = "copyMove";
+      draggedItems = {
+        side,
+        root: panes[side].root,
+        paths: [...panes[side].selected.keys()],
+        key: panes[side].loadedKey,
+      };
       event.dataTransfer.setData(
         mime,
-        JSON.stringify({
-          side,
-          root: panes[side].root,
-          paths: [...panes[side].selected.keys()],
-          key: panes[side].loadedKey,
-        }),
+        JSON.stringify(draggedItems),
       );
     };
-    row.ondragend = () => clearDropHighlights();
+    row.ondragend = () => {
+      draggedItems = null;
+      clearDropHighlights();
+    };
+    row.ondragover = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "none";
+    };
+    row.ondrop = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      clearDropHighlights();
+      notice("请拖到目标文件夹或列表空白处", true);
+    };
     if (entry.directory) {
       const children = node("div", undefined, "children");
       children.hidden = true;
@@ -828,7 +844,7 @@ function drawEntries(container, list, side) {
         event.preventDefault();
         event.stopPropagation();
         row.classList.add("dropover");
-        event.dataTransfer.dropEffect = "copy";
+        event.dataTransfer.dropEffect = sameMachine(draggedItems?.side, side) ? "move" : "copy";
       };
       row.ondragleave = () => row.classList.remove("dropover");
       row.ondrop = (event) => {
@@ -1028,6 +1044,7 @@ async function load(side, path, background = false) {
   if (generation !== p.generation || key !== endpointKey(side)) return;
   $(side + "Path").value = info.path;
   p.root = info.path;
+  p.machine = info.machine;
   p.loadedKey = key;
   p.paths[key] = info.path;
   p.entries = info.entries;
@@ -1081,7 +1098,7 @@ for (const side of sides) {
   $(side + "Pane").ondragover = (event) => {
     event.preventDefault();
     $(side + "Pane").classList.add("dropover");
-    event.dataTransfer.dropEffect = "copy";
+    event.dataTransfer.dropEffect = sameMachine(draggedItems?.side, side) ? "move" : "copy";
   };
   $(side + "Pane").ondragleave = (event) => {
     if (!$(side + "Pane").contains(event.relatedTarget))
@@ -1238,17 +1255,55 @@ $("upload").onclick = () =>
   action($("upload"), () => transferSelected("local"));
 $("download").onclick = () =>
   action($("download"), () => transferSelected("remote"));
+function sameMachine(source, target) {
+  if (!source || !panes[source] || !panes[target]) return false;
+  const p = panes[source], q = panes[target];
+  if (p.loadedKey !== endpointKey(source) || q.loadedKey !== endpointKey(target)) return false;
+  return source === target ||
+    (p.kind === "local" && q.kind === "local") ||
+    Boolean(p.machine && p.machine === q.machine);
+}
+async function moveSelection(payload, target, destination) {
+  const source = panes[payload.side];
+  const affected = sides.filter(side => sameMachine(payload.side, side))
+    .map(side => ({side, key: endpointKey(side)}));
+  const result = await api("files", {
+    side: source.kind,
+    route: source.connection,
+    root: payload.root,
+    path: payload.root,
+    operation: "move",
+    paths: payload.paths,
+    destination,
+  });
+  // Even a partial failure must refresh the entries that were already moved.
+  if (result.moved?.length) {
+    for (const {side, key} of affected) {
+      if (endpointKey(side) === key)
+        await refreshFileTree(side, destination);
+    }
+  }
+  if (result.error) throw Error("已移动 " + result.moved.length + " 项；其余未移动：" + result.error);
+  notice(result.moved.length ? "已移动 " + result.moved.length + " 项" : "项目已在目标文件夹中");
+}
 async function drop(event, target, targetRoot) {
   if (!targetRoot) throw Error("请先打开目标目录");
   const internal = event.dataTransfer.getData(mime);
   if (internal) {
     const payload = JSON.parse(internal);
-    if (payload.side === target) throw Error("请拖到另一栏传输");
     if (
+      !panes[payload.side] || !Array.isArray(payload.paths) ||
+      payload.key !== endpointKey(payload.side) ||
       payload.key !== panes[payload.side].loadedKey ||
       payload.root !== panes[payload.side].root
     )
       throw Error("源位置已变化，请重新选择文件");
+    if (panes[target].loadedKey !== endpointKey(target))
+      throw Error("目标位置已变化，请先刷新目录");
+    if (sameMachine(payload.side, target)) {
+      await moveSelection(payload, target, targetRoot);
+      return;
+    }
     showTransfer(
       createTransfer(
         payload.side,

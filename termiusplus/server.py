@@ -26,7 +26,7 @@ from . import remote_tasks
 from . import route_probe, scheduler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from .filesystem import file_preview, file_operation, local_info
+from .filesystem import file_preview, file_operation, move_entries, local_info
 from .ssh import validate_route, ssh_args, ssh_env
 
 BASE = Path(__file__).resolve().parent.parent
@@ -71,7 +71,7 @@ if len(sys.argv)<3:
     st=e.stat(follow_symlinks=False)
     entries.append(dict(name=e.name,path=os.path.join(p,e.name),directory=e.is_dir(follow_symlinks=True),symlink=e.is_symlink(),size=st.st_size))
    except OSError: pass
-data=dict(path=p,identity=identity,entries=entries)
+data=dict(path=p,identity=identity,entries=entries,machine=hashlib.sha256(machine.encode()).hexdigest())
 if len(sys.argv)>2:
  try:
   data['rsyncVersion']=subprocess.run(['rsync','--version'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True,timeout=5).stdout
@@ -108,18 +108,24 @@ def remote_preview(route, path):
 
 
 REMOTE_FILE_OPERATION_SCRIPT = inspect.getsource(file_operation) + "\nimport json,sys\nprint(json.dumps(file_operation(**json.loads(sys.argv[1])),ensure_ascii=True))\n"
+REMOTE_FILE_MOVE_SCRIPT = inspect.getsource(file_operation) + '\n' + inspect.getsource(move_entries) + "\nimport json,sys\nprint(json.dumps(move_entries(**json.loads(sys.argv[1])),ensure_ascii=True))\n"
 
 
 def file_action(data):
     values = {key: data.get(key) for key in ('root', 'path', 'operation', 'name')}
     if not all(isinstance(values[key], str) and values[key] for key in ('root', 'path', 'operation')):
         raise ValueError('文件操作参数不完整')
+    moving = values['operation'] == 'move'
+    operation = move_entries if moving else file_operation
+    if moving:
+        values = {key: data.get(key) for key in ('root', 'paths', 'destination')}
     if data.get('side') == 'local':
-        return file_operation(**values)
+        return operation(**values)
     if data.get('side') != 'remote':
         raise ValueError('文件位置不正确')
     route = validate_route(data['route'])
-    command = 'python3 -c ' + shlex.quote(REMOTE_FILE_OPERATION_SCRIPT) + ' ' + shlex.quote(json.dumps(values))
+    script = REMOTE_FILE_MOVE_SCRIPT if moving else REMOTE_FILE_OPERATION_SCRIPT
+    command = 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(json.dumps(values))
     result = subprocess.run(ssh_args(route) + [route['host'], command], capture_output=True, timeout=25, env=ssh_env(route))
     if result.returncode:
         raise ValueError(result.stderr.decode(errors='replace').strip()[-1500:] or '远程文件操作失败')

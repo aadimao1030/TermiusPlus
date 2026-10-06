@@ -45,8 +45,8 @@ def file_preview(path):
             return dict(result, kind='unsupported', message='暂不支持该二进制文件或文本编码。支持 UTF-8 和带 BOM 的 UTF-16/32 文本，以及 PNG、JPEG、GIF、WebP 图片。')
         return dict(result, kind='text', content=text, encoding=encoding, truncated=truncated)
 
-def file_operation(root, path, operation, name=None):
-    """Create or rename without replacement, or move entries into recoverable trash."""
+def file_operation(root, path, operation, name=None, destination=None):
+    """Create, rename or move without replacement, or use recoverable trash."""
     import os, uuid, ctypes, sys, errno, stat
     root = os.path.abspath(os.path.expanduser(root))
     path = os.path.abspath(os.path.expanduser(path))
@@ -73,8 +73,20 @@ def file_operation(root, path, operation, name=None):
     if not os.path.lexists(path):
         raise ValueError('项目已不存在，请刷新目录')
     parent, basename = os.path.split(path)
-    if operation == 'rename':
-        target = os.path.join(parent, name)
+    if operation in ('rename', 'move'):
+        if operation == 'move':
+            if not isinstance(destination, str) or not destination:
+                raise ValueError('请选择目标文件夹')
+            destination = os.path.realpath(os.path.expanduser(destination))
+            if not os.path.isdir(destination):
+                raise ValueError('目标必须是已存在的文件夹')
+            if stat.S_ISDIR(os.lstat(path).st_mode):
+                source = os.path.realpath(path)
+                if os.path.commonpath([source, destination]) == source:
+                    raise ValueError('不能把文件夹移动到自身或其子目录中')
+            target = os.path.join(destination, basename)
+        else:
+            target = os.path.join(parent, name)
         if target == path:
             return dict(path=target)
         if os.path.lexists(target):
@@ -93,6 +105,8 @@ def file_operation(root, path, operation, name=None):
             result = -1
         if result == 0:
             return dict(path=target)
+        if error == errno.EXDEV:
+            raise ValueError('跨文件系统请先传输，确认成功后再删除源项目')
         if error not in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
             raise OSError(error, os.strerror(error))
         if not stat.S_ISDIR(os.lstat(path).st_mode):
@@ -142,6 +156,55 @@ def file_operation(root, path, operation, name=None):
         return dict(path=target, original=path)
     raise ValueError('不支持的文件操作')
 
+def move_entries(root, paths, destination):
+    """Preflight an entire selection before moving; report any partial failure."""
+    import os, stat
+    root = os.path.abspath(os.path.expanduser(root))
+    if not isinstance(paths, list) or not 1 <= len(paths) <= 500:
+        raise ValueError('请选择 1–500 个项目移动')
+    if not isinstance(destination, str) or not destination:
+        raise ValueError('请选择目标文件夹')
+    destination = os.path.realpath(os.path.expanduser(destination))
+    if not os.path.isdir(destination):
+        raise ValueError('目标必须是已存在的文件夹')
+    selected = set()
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            raise ValueError('移动路径不正确')
+        path = os.path.abspath(os.path.expanduser(path))
+        if path == root or os.path.commonpath([root, path]) != root:
+            raise ValueError('只能操作当前目录内的项目')
+        if not os.path.lexists(path):
+            raise ValueError('项目已不存在，请刷新目录')
+        selected.add(path)
+    # Moving a selected parent also moves its selected children.
+    selected = sorted(path for path in selected if not any(
+        path.startswith(parent.rstrip('/') + '/') for parent in selected if parent != path))
+    targets = set()
+    plan = []
+    for path in selected:
+        target = os.path.join(destination, os.path.basename(path))
+        if target in targets:
+            raise ValueError('所选项目有同名项，无法移动到同一文件夹')
+        targets.add(target)
+        if stat.S_ISDIR(os.lstat(path).st_mode) and os.path.commonpath([os.path.realpath(path), destination]) == os.path.realpath(path):
+            raise ValueError('不能把文件夹移动到自身或其子目录中')
+        if os.path.realpath(os.path.dirname(path)) == destination:
+            continue
+        if os.path.lexists(target):
+            raise ValueError('同名项目已存在，不会覆盖：' + os.path.basename(path))
+        if os.lstat(path).st_dev != os.stat(destination).st_dev:
+            raise ValueError('跨文件系统请先传输，确认成功后再删除源项目')
+        plan.append(path)
+    moved = []
+    for path in plan:
+        try:
+            result = file_operation(root, path, 'move', destination=destination)
+            moved.append(dict(original=path, path=result['path']))
+        except Exception as error:
+            return dict(moved=moved, error=str(error), failed=path)
+    return dict(moved=moved)
+
 def local_info(path):
     root = Path(path).expanduser().resolve(strict=True)
     entries = []
@@ -152,4 +215,9 @@ def local_info(path):
             except OSError:
                 continue
     entries.sort(key=lambda e: (not e['directory'], e['name'].casefold()))
-    return dict(path=str(root), entries=entries)
+    import platform, hashlib
+    try:
+        machine = Path('/etc/machine-id').read_text().strip()
+    except OSError:
+        machine = platform.node()
+    return dict(path=str(root), entries=entries, machine=hashlib.sha256(machine.encode()).hexdigest())
