@@ -250,4 +250,5 @@ def local_info(path):
         machine = Path('/etc/machine-id').read_text().strip()
     except OSError:
         machine = platform.node()
-    return dict(path=str(root), entries=entries, machine=hashlib.sha256(machine.encode()).hexdigest())
+    account = hashlib.sha256((machine + '\0' + str(os.geteuid())).encode()).hexdigest()
+    return dict(path=str(root), entries=entries, machine=hashlib.sha256(machine.encode()).hexdigest(), account=account)

@@ -44,7 +44,7 @@ def run(directory):
         result=subprocess.run(ssh+[target['host'],info_command],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True,timeout=25)
         if result.returncode:raise ValueError(('B 无法独立登录 A：' if config.get('pull') else 'A 无法独立登录 B：')+result.stderr[-1000:])
         info=json.loads(result.stdout)
-        if info['identity']!=config['identity']:raise ValueError('远程会话登录的服务器或目录与本机选择不同，拒绝传输')
+        if info['identity']!=config['identity']:raise ValueError('远程会话登录的服务器、账号或目录与本机选择不同，拒绝传输')
         if not re.search(r'rsync\s+version\s+[3-9]\.',info.get('rsyncVersion','')):raise ValueError('另一台服务器需要 rsync 3.x')
         version=subprocess.run(['rsync','--version'],stdout=subprocess.PIPE,universal_newlines=True)
         if not re.search(r'rsync\s+version\s+[3-9]\.',version.stdout):raise ValueError('会话执行端需要 rsync 3.x')

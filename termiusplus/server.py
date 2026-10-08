@@ -62,7 +62,8 @@ try:
 except OSError:
  machine=platform.node()
 s=os.stat(p)
-identity=hashlib.sha256((machine+'\0'+p+'\0'+str(s.st_dev)+'\0'+str(s.st_ino)).encode()).hexdigest()
+account=hashlib.sha256((machine+'\0'+str(os.geteuid())).encode()).hexdigest()
+identity=hashlib.sha256((account+'\0'+p+'\0'+str(s.st_dev)+'\0'+str(s.st_ino)).encode()).hexdigest()
 entries=[]
 if len(sys.argv)<3:
  with os.scandir(p) as it:
@@ -71,7 +72,7 @@ if len(sys.argv)<3:
     st=e.stat(follow_symlinks=False)
     entries.append(dict(name=e.name,path=os.path.join(p,e.name),directory=e.is_dir(follow_symlinks=True),symlink=e.is_symlink(),size=st.st_size))
    except OSError: pass
-data=dict(path=p,identity=identity,entries=entries,machine=hashlib.sha256(machine.encode()).hexdigest())
+data=dict(path=p,identity=identity,entries=entries,machine=hashlib.sha256(machine.encode()).hexdigest(),account=account)
 if len(sys.argv)>2:
  try:
   data['rsyncVersion']=subprocess.run(['rsync','--version'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True,timeout=5).stdout
@@ -573,7 +574,7 @@ class Job:
                 try:
                     info = primary_info if route == routes[0] else remote_info(route, path, True)
                     if info['identity'] != baseline:
-                        self.event(route['name'] + ' 指向不同服务器或目录，已排除')
+                        self.event(route['name'] + ' 指向不同服务器、账号或目录，已排除')
                         continue
                     if 'rsyncVersion' in info and not re.search(r'rsync\s+version\s+[3-9]\.', info['rsyncVersion']):
                         raise ValueError('远程需要 rsync 3.x，请安装并确保 SSH 登录的 PATH 能找到它')

@@ -876,7 +876,7 @@ function drawEntries(container, list, side) {
         event.preventDefault();
         event.stopPropagation();
         row.classList.add("dropover");
-        event.dataTransfer.dropEffect = sameMachine(draggedItems?.side, side) ? "move" : "copy";
+        event.dataTransfer.dropEffect = sameAccess(draggedItems?.side, side) ? "move" : "copy";
       };
       row.ondragleave = () => row.classList.remove("dropover");
       row.ondrop = (event) => {
@@ -1146,6 +1146,7 @@ async function load(side, path, background = false) {
   $(side + "Path").value = info.path;
   p.root = info.path;
   p.machine = info.machine;
+  p.account = info.account;
   p.loadedKey = key;
   p.paths[key] = info.path;
   p.entries = info.entries;
@@ -1202,7 +1203,7 @@ for (const side of sides) {
   $(side + "Pane").ondragover = (event) => {
     event.preventDefault();
     $(side + "Pane").classList.add("dropover");
-    event.dataTransfer.dropEffect = sameMachine(draggedItems?.side, side) ? "move" : "copy";
+    event.dataTransfer.dropEffect = sameAccess(draggedItems?.side, side) ? "move" : "copy";
   };
   $(side + "Pane").ondragleave = (event) => {
     if (!$(side + "Pane").contains(event.relatedTarget))
@@ -1266,6 +1267,7 @@ function createTransfer(sourceSide, targetSide, sourceRoot, targetRoot, paths) {
   else
     Object.assign(options, {
       direction: "relay",
+      crossAccount: sameMachine(sourceSide, targetSide) && !sameAccess(sourceSide, targetSide),
       routes: [],
       source: { kind: "remote", path: sourceRoot, routes: routeGroup(source) },
       destination: {
@@ -1293,7 +1295,7 @@ function showTransfer(options, names, external = false) {
       ? "relay"
       : options.direction === "remote"
         ? "remote"
-        : passwordLogin
+        : passwordLogin || options.crossAccount
           ? "relay"
           : "remote";
     $("remoteMode").disabled = !!options._resumeId;
@@ -1367,6 +1369,13 @@ function sameMachine(source, target) {
     (p.kind === "local" && q.kind === "local") ||
     Boolean(p.machine && p.machine === q.machine);
 }
+function sameAccess(source, target) {
+  if (!sameMachine(source, target)) return false;
+  const p = panes[source], q = panes[target];
+  return source === target ||
+    (p.kind === "local" && q.kind === "local") ||
+    Boolean(p.account && p.account === q.account);
+}
 async function moveSelection(payload, target, destination) {
   const source = panes[payload.side];
   const affected = sides.filter(side => sameMachine(payload.side, side))
@@ -1404,7 +1413,7 @@ async function drop(event, target, targetRoot) {
       throw Error("源位置已变化，请重新选择文件");
     if (panes[target].loadedKey !== endpointKey(target))
       throw Error("目标位置已变化，请先刷新目录");
-    if (sameMachine(payload.side, target)) {
+    if (sameAccess(payload.side, target)) {
       await moveSelection(payload, target, targetRoot);
       return;
     }
@@ -1539,8 +1548,12 @@ function updateRemoteSettings() {
         : "A 登录 B 的 SSH 地址";
   }
   $("stageNote").textContent = direct
-    ? "数据直接在 A 和 B 之间传输。Mac 断网、合盖或退出本机服务后，远程会话继续；重开工具会重新读取进度。"
-    : "先下载到 Mac 再上传；Mac 必须在线。旧记录续传使用原中转数据。";
+    ? pending?.crossAccount
+      ? "同机跨账号直传需要执行账号能独立通过 SSH 密钥登录另一账号；否则请选择本机中转。远程会话启动后，Mac 断联也会继续。"
+      : "数据直接在 A 和 B 之间传输。Mac 断网、合盖或退出本机服务后，远程会话继续；重开工具会重新读取进度。"
+    : pending?.crossAccount
+      ? "同机不同账号：用源账号读取、目标账号写入，经本机中转。无需互相访问目录；需要本地磁盘空间并保持 Mac 在线。"
+      : "先下载到 Mac 再上传；Mac 必须在线。旧记录续传使用原中转数据。";
 }
 function saveRemoteSettings() {
   if (!pending || $("remoteMode").value !== "remote") return;

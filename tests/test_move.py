@@ -111,8 +111,8 @@ class DragMoveTests(unittest.TestCase):
         harness = r'''
 const assert = require('node:assert/strict');
 const mime='items',sides=['local','remote'];
-const panes={local:{kind:'remote',connection:{host:'server-a'},loadedKey:'a',root:'/source',machine:'same'},
-remote:{kind:'remote',connection:{host:'server-b'},loadedKey:'b',root:'/destination',machine:'same'}};
+const panes={local:{kind:'remote',connection:{host:'server-a'},loadedKey:'a',root:'/source',machine:'same',account:'user-a'},
+remote:{kind:'remote',connection:{host:'server-b'},loadedKey:'b',root:'/destination',machine:'same',account:'user-a'}};
 const endpointKey=side=>side==='local'?'a':'b';
 let moves=[],transfers=[],refreshes=[],notices=[],failure=null;
 const api=async(_,options)=>{moves.push(options);return {moved:[{path:options.destination+'/file'}],error:failure}};
@@ -132,9 +132,16 @@ const payload={side:'local',key:'a',root:'/source',paths:['/source/file']};
   await drop(event(payload),'remote','/destination/folder');
   assert.equal(moves.length,2);assert.equal(moves[1].route.host,'server-a');
   assert.equal(moves[1].destination,'/destination/folder');
+  panes.remote.account='user-b';
+  assert.equal(sameMachine('local','remote'),true);
+  assert.equal(sameAccess('local','remote'),false);
+  await drop(event(payload),'remote','/destination/folder');
+  assert.equal(moves.length,2);assert.equal(transfers.length,1,'different accounts copy using two logins');
+  panes.remote.account=undefined;
+  assert.equal(sameAccess('local','remote'),false,'unknown account must not be moved across connections');
   panes.remote.machine='different';
   await drop(event(payload),'remote','/destination');
-  assert.equal(moves.length,2);assert.equal(transfers.length,1);
+  assert.equal(moves.length,2);assert.equal(transfers.length,2);
   await assert.rejects(()=>drop(event({...payload,key:'old'}),'remote','/destination'),/源位置已变化/);
   panes.remote.loadedKey='old';
   await assert.rejects(()=>drop(event(payload),'remote','/destination'),/目标位置已变化/);
