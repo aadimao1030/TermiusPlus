@@ -80,11 +80,26 @@ class TerminalTests(unittest.TestCase):
     def test_effective_ssh_keepalive_is_tolerant_for_terminal_only(self):
         route=app.validate_route({'host':'user@example'})
         commands=[terminal.ssh_command(route,'',app.ssh_args),app.ssh_args(route)+[route['host']]]
-        for command,expected in zip(commands,[(15,20),(10,2)]):
+        for command,expected in zip(commands,[(15,3),(10,2)]):
             result=subprocess.run(command[:1]+['-G']+command[1:],capture_output=True,text=True,check=True)
             settings=dict(line.split(' ',1) for line in result.stdout.splitlines())
             self.assertEqual((int(settings['serveraliveinterval']),int(settings['serveralivecountmax'])),expected)
             self.assertEqual(settings['tcpkeepalive'],'yes')
+
+    def test_persistent_bootstrap_quotes_paths_and_reuses_tmux_session(self):
+        import shlex
+        route=app.validate_route({'host':'user@example'})
+        name='tp-'+'a'*32
+        path="/tmp/a' $(touch injected); folder"
+        command=terminal.ssh_command(route,path,app.ssh_args,name)
+        tokens=shlex.split(command[-1])
+        self.assertIn('new-session',tokens)
+        self.assertIn('-A',tokens)
+        self.assertEqual(tokens[tokens.index('-s')+1],name)
+        self.assertEqual(tokens[tokens.index('-c')+1],path)
+        self.assertIn('termiusplus-terminal',tokens)
+        self.assertIn('未安装 tmux',command[-1])
+        with self.assertRaises(ValueError):terminal.ssh_command(route,path,app.ssh_args,'bad;session')
 
     def test_live_shell_survives_long_browser_suspension(self):
         session=terminal.TerminalSession(['/bin/sh','-i'],'suspended')

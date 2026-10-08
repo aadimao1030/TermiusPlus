@@ -3,6 +3,7 @@ import base64
 import collections
 import errno
 import fcntl
+import json
 import os
 import pty
 import secrets
@@ -44,22 +45,30 @@ def local_command(path):
     return [shell, '-l'], str(directory)
 
 
-def ssh_command(route, path, ssh_args):
+def ssh_command(route, path, ssh_args, session_name=None):
     import shlex
     if not isinstance(path, str) or '\0' in path or len(path) > 8192:
         raise ValueError('终端目录不正确')
     transport = ssh_args(route)
-    # OpenSSH uses the first value for each option. Interactive shells need a
-    # longer grace period than probes/transfers during brief network outages.
+    # OpenSSH uses the first value for each option. Detect dead transports while
+    # tmux retains the shell, so the supervisor can reconnect promptly.
     args = transport[:1] + ['-o', 'ServerAliveInterval=15',
-                            '-o', 'ServerAliveCountMax=20',
+                            '-o', 'ServerAliveCountMax=3',
                             '-o', 'TCPKeepAlive=yes'] + transport[1:] + ['-tt', route['host']]
-    if path and path != '~':
-        # Start a login shell in the selected directory; quote the path as data.
-        if path.startswith('~/'):
-            directory = '"$HOME"/' + shlex.quote(path[2:])
-        else:
-            directory = shlex.quote(path)
+    # Quote the initial directory; subsequent attaches retain the shell's cwd.
+    directory = ('"$HOME"' if not path or path == '~' else
+                 '"$HOME"/' + shlex.quote(path[2:]) if path.startswith('~/') else shlex.quote(path))
+    if session_name:
+        import re
+        if not re.fullmatch(r'tp-[a-f0-9]{32}', session_name):
+            raise ValueError('远程终端会话名称不正确')
+        args.append(
+            'if command -v tmux >/dev/null 2>&1; then '
+            'exec tmux -L termiusplus-terminal -f /dev/null new-session -A -s ' + session_name +
+            ' -c ' + directory + ' \\; set-option -t ' + session_name + ' status off; '
+            'else printf "\\n[服务器未安装 tmux；断线后会重连，但无法保留原命令和目录。]\\n"; '
+            'cd -- ' + directory + ' || exit; exec "${SHELL:-/bin/sh}" -l; fi')
+    elif path and path != '~':
         args.append('cd -- ' + directory + ' || exit; exec "${SHELL:-/bin/sh}" -l')
     return args
 
@@ -208,7 +217,9 @@ def terminal_api(endpoint, data, validate_route, ssh_args):
             local = True
         else:
             route = validate_route(data.get('route'))
-            command = ssh_command(route, data.get('path', ''), ssh_args)
+            session_name = 'tp-' + secrets.token_hex(16)
+            transport = ssh_command(route, data.get('path', ''), ssh_args, session_name)
+            command = ['--reconnect-ssh', json.dumps(transport)]
             cwd = None
             name = route['name']
             local = False
