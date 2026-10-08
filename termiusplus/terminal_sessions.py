@@ -48,7 +48,12 @@ def ssh_command(route, path, ssh_args):
     import shlex
     if not isinstance(path, str) or '\0' in path or len(path) > 8192:
         raise ValueError('终端目录不正确')
-    args = ssh_args(route) + ['-tt', route['host']]
+    transport = ssh_args(route)
+    # OpenSSH uses the first value for each option. Interactive shells need a
+    # longer grace period than probes/transfers during brief network outages.
+    args = transport[:1] + ['-o', 'ServerAliveInterval=15',
+                            '-o', 'ServerAliveCountMax=20',
+                            '-o', 'TCPKeepAlive=yes'] + transport[1:] + ['-tt', route['host']]
     if path and path != '~':
         # Start a login shell in the selected directory; quote the path as data.
         if path.startswith('~/'):
@@ -254,14 +259,20 @@ def close_all():
         session.close()
 
 
+def reap_finished(now=None):
+    """Forget completed sessions; lack of browser polling never ends a live shell."""
+    now = time.monotonic() if now is None else now
+    with SESSIONS_LOCK:
+        for identifier, session in list(SESSIONS.items()):
+            if session.done and now - session.last_seen > 300:
+                SESSIONS.pop(identifier)
+
+
 def reap_abandoned():
-    # A vanished browser stops polling. Do not leave its shell or SSH process indefinitely.
+    # Browsers and WKWebView can suspend hidden pages for many minutes. Live
+    # sessions remain bounded to eight and are closed explicitly or at shutdown.
     while True:
         time.sleep(30)
-        with SESSIONS_LOCK:
-            sessions = list(SESSIONS.values())
-        for session in sessions:
-            if not session.done and time.monotonic()-session.last_seen > 300:
-                session.close()
+        reap_finished()
 
 threading.Thread(target=reap_abandoned, daemon=True).start()

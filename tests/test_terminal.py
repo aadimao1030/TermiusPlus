@@ -2,6 +2,7 @@ import base64
 import fcntl
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import termios
@@ -75,6 +76,36 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual(shlex.split(command[-1])[2],path)
         self.assertIn('"$HOME"/',terminal.ssh_command(route,'~/folder name',app.ssh_args)[-1])
         with self.assertRaises(ValueError):terminal.ssh_command(route,'bad\0path',app.ssh_args)
+
+    def test_effective_ssh_keepalive_is_tolerant_for_terminal_only(self):
+        route=app.validate_route({'host':'user@example'})
+        commands=[terminal.ssh_command(route,'',app.ssh_args),app.ssh_args(route)+[route['host']]]
+        for command,expected in zip(commands,[(15,20),(10,2)]):
+            result=subprocess.run(command[:1]+['-G']+command[1:],capture_output=True,text=True,check=True)
+            settings=dict(line.split(' ',1) for line in result.stdout.splitlines())
+            self.assertEqual((int(settings['serveraliveinterval']),int(settings['serveralivecountmax'])),expected)
+            self.assertEqual(settings['tcpkeepalive'],'yes')
+
+    def test_live_shell_survives_long_browser_suspension(self):
+        session=terminal.TerminalSession(['/bin/sh','-i'],'suspended')
+        with patch.dict(terminal.SESSIONS,{session.id:session},clear=True):
+            try:
+                session.last_seen=time.monotonic()-3600
+                terminal.reap_finished()
+                self.assertIs(terminal.SESSIONS.get(session.id),session)
+                self.assertFalse(session.closed)
+                session.write(b"printf 'AFTER_SUSPEND_OK\\n'\r")
+                self.wait_for(session,b'\r\nAFTER_SUSPEND_OK\r\n')
+            finally:session.close()
+
+    def test_only_old_finished_sessions_are_reaped(self):
+        from types import SimpleNamespace
+        old=SimpleNamespace(done=True,last_seen=0)
+        recent=SimpleNamespace(done=True,last_seen=990)
+        live=SimpleNamespace(done=False,last_seen=0)
+        with patch.dict(terminal.SESSIONS,{'old':old,'recent':recent,'live':live},clear=True):
+            terminal.reap_finished(now=1000)
+            self.assertEqual(terminal.SESSIONS,{'recent':recent,'live':live})
 
     def test_terminal_api_real_shell_and_binary_input(self):
         identifier=None

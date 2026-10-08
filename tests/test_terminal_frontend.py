@@ -30,8 +30,9 @@ const window={frameElement:{dataset:{fragment:'TOKEN?config='+encodeURIComponent
 const location={hash:''};
 const localStorage={getItem:()=>null,setItem(){}};
 const navigator={clipboard:{writeText:()=>Promise.resolve()}};
-const opened=[];
+const opened=[],closed=[];
 const fetch=async(url,options)=>{const payload=JSON.parse(options.body);
+ if(String(url).endsWith('/close'))closed.push(payload);
  if(String(url).endsWith('/open')){opened.push(payload);
   return {ok:true,json:async()=>({id:'sess'+(opened.length),name:payload.local?'本地':'远程',local:!!payload.local})}}
  if(String(url).endsWith('/poll'))return {ok:true,json:async()=>({content:'',cursor:0,truncated:false,done:false,exitCode:null})};
@@ -137,6 +138,77 @@ class TerminalFrontendTests(unittest.TestCase):
 
     def test_picker_is_shown_when_the_focused_pane_has_no_connection(self):
         self.run_frontend(dict(local=False,route=None,path='',localPath='/tmp/local dir',autoConnect=False),PICKER_ONLY_ASSERTIONS)
+
+    def test_cached_pagehide_preserves_session_and_true_unload_closes_it(self):
+        self.run_frontend(dict(local=True,path='/tmp',autoConnect=True),r"""
+(async()=>{
+ await new Promise(r=>setTimeout(r,10));
+ const s=sessions[0],id=s.id;
+ assert.ok(id);
+ listeners.pagehide[0]({persisted:true});
+ assert.equal(s.id,id);assert.equal(s.closed,false);assert.equal(closed.length,0);
+ listeners.pagehide[0]({persisted:false});
+ assert.equal(s.closed,true);assert.deepEqual(closed,[{id}]);
+ console.log('FRONTEND_OK');process.exit(0);
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+
+    def test_poll_recovers_after_many_failures_without_closing_or_losing_output(self):
+        frontend=(ROOT/'web/scripts/terminal.js').read_text()
+        polling=frontend[frontend.index('async function poll('):frontend.index('function send(')]
+        code=r"""
+const assert=require('node:assert/strict');
+const waits=[],requests=[],output=[],states=[];
+async function delay(ms){waits.push(ms)}
+function sessionState(s,text){states.push(text)}
+const s={id:'original',generation:3,closed:false,cursor:42,name:'fixture',
+ term:{write(data,cb){output.push(Buffer.from(data).toString());cb()},writeln(){}}};
+async function api(operation,data){
+ assert.equal(operation,'poll');requests.push({...data});
+ if(requests.length<=7)throw Error('temporary network failure');
+ if(requests.length===8)return {content:Buffer.from('recovered').toString('base64'),cursor:51,done:false};
+ return {content:'',cursor:51,done:true,exitCode:0};
+}
+__POLL__
+(async()=>{
+ await poll(s,'original',3);
+ assert.equal(requests.length,9);
+ requests.slice(0,8).forEach(r=>assert.deepEqual(r,{id:'original',cursor:42}));
+ assert.deepEqual(requests[8],{id:'original',cursor:51});
+ assert.deepEqual(output,['recovered']);assert.equal(s.closed,false);
+ assert.ok(waits.every(ms=>ms<=10000));assert.equal(s.cursor,51);
+ // A replaced server/token cannot restore this ID, but must not send a close RPC.
+ requests.length=0;s.id='original';s.generation=4;
+ api=async(operation)=>{assert.equal(operation,'poll');throw Object.assign(Error('unauthorized'),{status:401})};
+ await poll(s,'original',4);assert.equal(s.id,null);assert.equal(s.closed,false);
+ console.log('FRONTEND_OK');
+})().catch(e=>{console.error(e);process.exit(1)});
+""".replace('__POLL__',polling)
+        result=subprocess.run(['node','-e',code],capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('FRONTEND_OK',result.stdout)
+
+    def test_stuck_poll_request_is_aborted_so_recovery_can_continue(self):
+        frontend=(ROOT/'web/scripts/terminal.js').read_text()
+        api=frontend[frontend.index('async function api('):frontend.index('function delay(')]
+        code=r"""
+const assert=require('node:assert/strict'),token='fixture';
+let timeoutCallback,cleared=false;
+function setTimeout(callback,ms){assert.equal(ms,20000);timeoutCallback=callback;return 7}
+function clearTimeout(id){assert.equal(id,7);cleared=true}
+const fetch=(url,options)=>new Promise((resolve,reject)=>{
+ assert.ok(options.signal);options.signal.addEventListener('abort',()=>reject(Error('aborted')));
+});
+__API__
+(async()=>{
+ const request=api('poll',{id:'same-session',cursor:42});
+ timeoutCallback();await assert.rejects(request,/aborted/);assert.equal(cleared,true);
+ console.log('FRONTEND_OK');
+})().catch(e=>{console.error(e);process.exit(1)});
+""".replace('__API__',api)
+        result=subprocess.run(['node','-e',code],capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('FRONTEND_OK',result.stdout)
 
     def test_file_pane_terminal_buttons_map_to_local_or_the_pane_connection(self):
         html=(ROOT/'web/scripts/files.js').read_text()

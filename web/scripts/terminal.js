@@ -236,17 +236,28 @@ function activate(s) {
   });
 }
 async function api(operation, data = {}) {
-  const response = await fetch("/api/terminal/" + operation, {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + token,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
-  const result = await response.json();
-  if (!response.ok) throw Error(result.error || "终端请求失败");
-  return result;
+  const controller = operation === "poll" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  try {
+    const response = await fetch("/api/terminal/" + operation, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+      signal: controller?.signal,
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      const error = Error(result.error || "终端请求失败");
+      error.status = response.status;
+      throw error;
+    }
+    return result;
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
 }
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -283,12 +294,15 @@ async function poll(s, id, epoch) {
       if (s.closed || s.id !== id || s.generation !== epoch) return;
       failures++;
       sessionState(s, "等待恢复连接 · " + s.name + "：" + error.message, true);
-      if (failures >= 5) {
-        await disconnect(s);
-        sessionState(s, "终端连接中断，请重新连接 · " + s.name, true);
+      if (error.status === 401 || error.status === 403 || /终端会话不存在/.test(error.message)) {
+        // The server/token has changed; closing the old ID cannot recover it.
+        s.id = null;
+        s.generation++;
+        sessionState(s, "会话已不可用，请重新打开连接 · " + s.name, true);
         return;
       }
-      await delay(1000);
+      // Keep the same PTY and cursor through transient HTTP/network failures.
+      await delay(Math.min(1000 * 2 ** Math.min(failures - 1, 4), 10000));
     }
   }
 }
@@ -507,7 +521,8 @@ async function copy(s = active) {
     sessionState(s, "复制不可用，请使用系统复制快捷键", true);
   }
 }
-window.addEventListener("pagehide", () => {
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted) return;
   for (const s of sessions) {
     s.closed = true;
     s.generation++;
