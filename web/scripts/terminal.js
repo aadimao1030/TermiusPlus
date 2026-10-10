@@ -106,20 +106,23 @@ $("terminalSelf").onclick = () => {
   if (filesFrame) filesFrame.hidden = true;
   if (active) activate(active);
 };
-$("filesLink").onclick = async (event) => {
-  event.preventDefault();
+async function showFileWorkspace(view) {
   hidePicker();
   if (window.frameElement?.dataset.hostView === "files") {
-    parent.postMessage({ type: "termiusplus:show-files" }, appOrigin);
+    parent.postMessage({ type: "termiusplus:show-" + view }, appOrigin);
     return;
   }
   if (filesFrame) {
     filesFrame.hidden = false;
+    filesFrame.contentWindow.postMessage(
+      { type: "termiusplus:show-" + view }, appOrigin,
+    );
     return;
   }
   filesFrame = document.createElement("iframe");
   filesFrame.className = "files-frame";
-  filesFrame.title = "文件传输";
+  filesFrame.title = "文件传输与传输队列";
+  filesFrame.dataset.view = view;
   filesFrame.dataset.hostView = "terminal";
   filesFrame.dataset.fragment = token;
   filesFrame.dataset.routes = JSON.stringify(routes);
@@ -133,7 +136,12 @@ $("filesLink").onclick = async (event) => {
     filesFrame = null;
     state(error.message, true);
   }
+}
+$("filesLink").onclick = (event) => {
+  event.preventDefault();
+  return showFileWorkspace("files");
 };
+$("queueLink").onclick = () => showFileWorkspace("queue");
 window.addEventListener("message", (event) => {
   if (event.origin !== appOrigin) return;
   const fromFiles = event.source === filesFrame?.contentWindow,

@@ -1909,3 +1909,29 @@ dialog .dialog-footer {
 .column-resizer:hover:before {
   background: var(--accent);
 }
+
+/* The queue is a separate workspace with its own scrolling list. */
+.queue-workspace {
+  height: calc(100dvh - 50px);
+  min-height: 260px;
+  padding: 12px 14px;
+  display: flex;
+}
+.queue-workspace .queue {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.queue-workspace #jobs {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+@media (max-width: 760px) {
+  .queue-workspace {
+    padding: 8px;
+    height: calc(100dvh - 62px);
+  }
+}

@@ -81,6 +81,7 @@
           <div class="title">›_ <span>TermiusPlus</span></div>
           <nav class="view-nav" aria-label="工作区">
             <button class="active" id="filesNav">文件传输</button
+            ><button id="queueNav">传输队列</button
             ><button id="terminalNav">终端</button>
           </nav>
           <div class="file-tools" id="fileTools">
@@ -293,30 +294,23 @@
                 ></div>
               </section>
             </div>
-            <section class="queue">
-              <div class="queue-head">
-                <strong>传输队列 <span id="jobCount">0</span></strong>
-              </div>
-              <div id="jobs" tabindex="0" role="region" aria-label="传输记录">
-                <div class="queue-empty">
-                  <svg><use href="#i-transfer" /></svg>传输任务会显示在这里
-                </div>
-              </div>
-              <div
-                class="panel-resizer"
-                id="queueResizer"
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="调整传输队列高度"
-                tabindex="0"
-                title="拖动调整高度"
-              ></div>
-            </section>
           </div>
           <footer class="statusbar">
             <span class="indicator" id="status">正在检查环境…</span
             ><span>打包 ⌘/Ctrl ⇧ P · 传输 ⌘/Ctrl ↵ · 刷新 ⌘/Ctrl R</span>
           </footer>
+        </div>
+        <div id="queueWorkspace" class="queue-workspace" hidden>
+          <section class="queue">
+            <div class="queue-head">
+              <strong>传输队列 <span id="jobCount">0</span></strong>
+            </div>
+            <div id="jobs" tabindex="0" role="region" aria-label="传输记录">
+              <div class="queue-empty">
+                <svg><use href="#i-transfer" /></svg>传输任务会显示在这里
+              </div>
+            </div>
+          </section>
         </div>
       </main>
     </div>

@@ -373,14 +373,32 @@ function renderRoutes() {
 }
 let terminalFrame = null,
   filePageScroll = 0;
-function showFiles() {
+function showWorkspace(view) {
+  if (!$("fileWorkspace").hidden) filePageScroll = window.scrollY;
+  const files = view === "files";
   document.body.classList.remove("terminal-view");
-  $("fileTools").hidden = false;
-  requestAnimationFrame(() => window.scrollTo(0, filePageScroll));
+  document.body.classList.toggle("queue-view", !files);
+  $("fileTools").hidden = !files;
   if (terminalFrame) terminalFrame.hidden = true;
-  $("fileWorkspace").hidden = false;
-  $("filesNav").classList.add("active");
+  $("fileWorkspace").hidden = !files;
+  $("queueWorkspace").hidden = files;
+  $("filesNav").classList.toggle("active", files);
+  $("queueNav").classList.toggle("active", !files);
   $("terminalNav").classList.remove("active");
+  requestAnimationFrame(() => {
+    if (files) {
+      applyLayout();
+      window.scrollTo(0, filePageScroll);
+    } else window.scrollTo(0, 0);
+  });
+  if (!files) renderJobs(latestJobs);
+}
+function showFiles() {
+  showWorkspace("files");
+}
+function showQueue() {
+  closeMenus();
+  showWorkspace("queue");
 }
 
 function terminalConfig(side, workspace = panes) {
@@ -409,10 +427,13 @@ async function openTerminal(side = focused, requestConnection = false) {
     );
     return;
   }
-  filePageScroll = window.scrollY;
+  if (!$("fileWorkspace").hidden) filePageScroll = window.scrollY;
+  document.body.classList.remove("queue-view");
   document.body.classList.add("terminal-view");
   $("fileTools").hidden = true;
   $("fileWorkspace").hidden = true;
+  $("queueWorkspace").hidden = true;
+  $("queueNav").classList.remove("active");
   $("filesNav").classList.remove("active");
   $("terminalNav").classList.add("active");
   if (terminalFrame) {
@@ -442,13 +463,15 @@ async function openTerminal(side = focused, requestConnection = false) {
   }
 }
 window.addEventListener("message", (event) => {
-  if (
-    event.origin === appOrigin &&
-    event.source === terminalFrame?.contentWindow &&
-    event.data?.type === "termiusplus:show-files"
-  )
-    showFiles();
+  if (event.origin !== appOrigin) return;
+  const fromTerminal = event.source === terminalFrame?.contentWindow,
+    fromHost = window.frameElement?.dataset.hostView === "terminal" &&
+      event.source === parent;
+  if (!fromTerminal && !fromHost) return;
+  if (event.data?.type === "termiusplus:show-files") showFiles();
+  if (event.data?.type === "termiusplus:show-queue") showQueue();
 });
+$("queueNav").onclick = showQueue;
 $("terminalNav").onclick = () => openTerminal();
 for (const side of sides)
   $(side + "Terminal").onclick = () => openTerminal(side, true);
@@ -1728,6 +1751,7 @@ function previewSelection() {
 $("preview").onclick = () => action($("preview"), previewSelection);
 $("pack").onclick = () => action($("pack"), packSelection);
 document.addEventListener("keydown", (event) => {
+  if ($("fileWorkspace").hidden) return;
   if (event.key === "Escape") {
     closeMenus();
     if (!document.querySelector("dialog[open]")) {
@@ -1844,8 +1868,11 @@ function transferMetricText(job, m) {
   return parts.join(" · ");
 }
 const logViews = new Map();
+let latestJobs = [];
 function renderJobs(jobs) {
-  if ($("fileWorkspace").hidden) return;
+  latestJobs = jobs;
+  $("jobCount").textContent = jobs.length + (staging ? 1 : 0);
+  if ($("queueWorkspace").hidden) return;
   const queueScroll = $("jobs").scrollTop;
   document.querySelectorAll("#jobs details[data-job-id]").forEach((details) =>
     logViews.set(details.dataset.jobId, {
@@ -1853,7 +1880,6 @@ function renderJobs(jobs) {
       scroll: details.querySelector("pre").scrollTop,
     }),
   );
-  $("jobCount").textContent = jobs.length + (staging ? 1 : 0);
   $("jobs").replaceChildren();
   if (staging) {
     const stageRow = node("div", undefined, "job"),
@@ -2047,6 +2073,7 @@ function renderJobs(jobs) {
             directory = job.target.paths?.length === 1
               ? job.target.paths[0].replace(/\/[^/]+$/, "") || "/"
               : job.target.path;
+          showFiles();
           await selectEndpoint(side, job.target.kind, connection, directory);
         });
       destination.append(location, open);
@@ -2157,16 +2184,13 @@ let layout = {};
 try {
   layout = JSON.parse(localStorage.getItem("termiusplus.layout") || "{}");
 } catch {}
-const paneGrid = document.querySelector(".panes"),
-  queuePanel = document.querySelector(".queue");
+const paneGrid = document.querySelector(".panes");
 for (const key of ["localHeight", "remoteHeight"]) {
   if (!Number.isFinite(layout[key]))
     layout[key] = Math.max(390, Math.round(window.innerHeight * 0.68));
   layout[key] = Math.max(260, Math.min(2400, layout[key]));
 }
-layout.queueHeight = Number.isFinite(layout.queueHeight)
-  ? Math.max(110, Math.min(1800, layout.queueHeight))
-  : 220;
+delete layout.queueHeight;
 layout.leftRatio = Number.isFinite(layout.leftRatio)
   ? Math.max(0.18, Math.min(0.82, layout.leftRatio))
   : 0.5;
@@ -2186,7 +2210,6 @@ function saveLayout() {
 function applyLayout() {
   for (const side of sides)
     $(side + "Pane").style.height = layout[side + "Height"] + "px";
-  queuePanel.style.height = layout.queueHeight + "px";
   const width = paneGrid.clientWidth - 10;
   if (width > 0) {
     const minimum = Math.min(180, width * 0.35),
@@ -2205,7 +2228,6 @@ function applyLayout() {
   for (const [id, key] of [
     ["localResizer", "localHeight"],
     ["remoteResizer", "remoteHeight"],
-    ["queueResizer", "queueHeight"],
   ])
     $(id).setAttribute("aria-valuenow", Math.round(layout[key]));
 }
@@ -2277,9 +2299,7 @@ function bindResizer(id, key, axis, min, max) {
       key,
       axis === "x"
         ? 0.5
-        : key === "queueHeight"
-          ? 220
-          : Math.max(390, Math.round(window.innerHeight * 0.68)),
+        : Math.max(390, Math.round(window.innerHeight * 0.68)),
     );
     applyLayout();
     saveLayout();
@@ -2288,9 +2308,9 @@ function bindResizer(id, key, axis, min, max) {
 bindResizer("columnResizer", "leftRatio", "x", 0.18, 0.82);
 bindResizer("localResizer", "localHeight", "y", 260, 2400);
 bindResizer("remoteResizer", "remoteHeight", "y", 260, 2400);
-bindResizer("queueResizer", "queueHeight", "y", 110, 1800);
 new ResizeObserver(applyLayout).observe(paneGrid);
 applyLayout();
+if (window.frameElement?.dataset.view === "queue") showQueue();
 renderRoutes();
 for (const side of sides) {
   updateHeading(side);

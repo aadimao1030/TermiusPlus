@@ -43,8 +43,8 @@ for (const id of ['localResizer','remoteResizer']) {
   assert.equal(layout.localHeight,612);
   assert.equal(layout.remoteHeight,612);
 }
-$('queueResizer').onkeydown({key:'ArrowDown',preventDefault(){}});
-assert.equal(layout.queueHeight,260);
+assert.equal(layout.queueHeight,undefined);
+assert.equal(elements.has('queueResizer'),false);
 assert.equal(layout.localHeight,612);
 $('localResizer').onpointerdown({button:0,pointerId:2,clientY:100,preventDefault(){}});
 $('localResizer').onpointermove({pointerId:2,clientY:-1000});

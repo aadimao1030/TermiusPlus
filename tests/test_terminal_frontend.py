@@ -14,16 +14,18 @@ function mkEl(tag){const el={tagName:(tag||'div').toUpperCase(),children:[],attr
  hidden:false,disabled:false,className:'',textContent:'',tabIndex:0,clientWidth:0,clientHeight:0,href:'',title:'',
  classList:{_s:new Set(),add(...c){c.forEach(x=>this._s.add(x))},remove(...c){c.forEach(x=>this._s.delete(x))},
   toggle(c,on){on?this._s.add(c):this._s.delete(c)},contains(c){return this._s.has(c)}},
+ contentWindow:{messages:[],postMessage(m){this.messages.push(m)}},
  append(...n){n.forEach(x=>this.children.push(x))},replaceChildren(...n){this.children=n},
  setAttribute(k,v){this.attributes[k]=String(v)},getAttribute(k){return this.attributes[k]},
  remove(){},focus(){},contains(n){return n===this||this.children.includes(n)},
  getBoundingClientRect(){return {left:10,top:0,bottom:30,right:120}},
  querySelector(){return null},querySelectorAll(){return []},addEventListener(){}};return el}
-const stubIds={};for(const id of ['newSession','sessionPicker','pickerRoutes','sessionTabs','terminal','emptyTerminal','state','filesLink','terminalSelf'])stubIds[id]=mkEl('div');
+const stubIds={};for(const id of ['newSession','sessionPicker','pickerRoutes','sessionTabs','terminal','emptyTerminal','state','filesLink','queueLink','terminalSelf'])stubIds[id]=mkEl('div');
 const document={baseURI:'http://127.0.0.1:19387/',title:'',body:mkEl('body'),
  getElementById:id=>stubIds[id]||null,createElement:mkEl,createTextNode:t=>({text:t}),addEventListener(){}};
 const listeners={};
-const parentStub={postMessage(){}};
+const hostMessages=[];
+const parentStub={postMessage(message){hostMessages.push(message)}};
 const parent=parentStub;
 const window={frameElement:{dataset:{fragment:'TOKEN?config='+encodeURIComponent(__CONFIG__),hostView:'files'}},innerWidth:1200,innerHeight:800,scrollY:0,
  addEventListener(t,f){(listeners[t]=listeners[t]||[]).push(f)},scrollTo(){}};
@@ -31,7 +33,9 @@ const location={hash:''};
 const localStorage={getItem:()=>null,setItem(){}};
 const navigator={clipboard:{writeText:()=>Promise.resolve()}};
 const opened=[],closed=[];
-const fetch=async(url,options)=>{const payload=JSON.parse(options.body);
+const fetch=async(url,options)=>{
+ if(!options)return {ok:true,text:async()=>'<html>files</html>'};
+ const payload=JSON.parse(options.body);
  if(String(url).endsWith('/close'))closed.push(payload);
  if(String(url).endsWith('/open')){opened.push(payload);
   return {ok:true,json:async()=>({id:'sess'+(opened.length),name:payload.local?'本地':'远程',local:!!payload.local})}}
@@ -138,6 +142,35 @@ class TerminalFrontendTests(unittest.TestCase):
 
     def test_picker_is_shown_when_the_focused_pane_has_no_connection(self):
         self.run_frontend(dict(local=False,route=None,path='',localPath='/tmp/local dir',autoConnect=False),PICKER_ONLY_ASSERTIONS)
+
+    def test_queue_navigation_preserves_terminal_sessions_and_files_frame(self):
+        self.run_frontend(dict(local=True,path='/tmp',autoConnect=True),r"""
+(async()=>{
+ await new Promise(r=>setTimeout(r,10));
+ const id=sessions[0].id;
+ await stubIds.queueLink.onclick();
+ assert.equal(hostMessages.at(-1).type,'termiusplus:show-queue');
+ assert.equal(sessions[0].id,id);
+ assert.equal(closed.length,0);
+ // A standalone /terminal page reuses one files iframe for both file views.
+ window.frameElement=null;
+ await showFileWorkspace('queue');
+ const frame=filesFrame;
+ assert.equal(frame.dataset.view,'queue');
+ assert.equal(document.body.children.filter(e=>e.tagName==='IFRAME').length,1);
+ stubIds.terminalSelf.onclick();
+ assert.equal(frame.hidden,true);
+ await showFileWorkspace('files');
+ assert.equal(filesFrame,frame);
+ assert.equal(frame.contentWindow.messages.at(-1).type,'termiusplus:show-files');
+ await showFileWorkspace('queue');
+ assert.equal(frame.contentWindow.messages.at(-1).type,'termiusplus:show-queue');
+ assert.equal(sessions[0].id,id);
+ assert.equal(opened.length,1);
+ assert.equal(closed.length,0);
+ console.log('FRONTEND_OK');process.exit(0);
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
 
     def test_cached_pagehide_preserves_session_and_true_unload_closes_it(self):
         self.run_frontend(dict(local=True,path='/tmp',autoConnect=True),r"""
