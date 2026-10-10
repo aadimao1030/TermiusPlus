@@ -2184,10 +2184,24 @@ let layout = {};
 try {
   layout = JSON.parse(localStorage.getItem("termiusplus.layout") || "{}");
 } catch {}
-const paneGrid = document.querySelector(".panes");
+const paneGrid = document.querySelector(".panes"),
+  fileContent = document.querySelector(".content"),
+  workspaceHeader = document.querySelector(".topbar"),
+  workspaceStatus = document.querySelector(".statusbar");
+function availablePaneHeight() {
+  const style = getComputedStyle(fileContent);
+  return Math.max(
+    260,
+    window.innerHeight -
+      workspaceHeader.offsetHeight -
+      workspaceStatus.offsetHeight -
+      (parseFloat(style.paddingTop) || 0) -
+      (parseFloat(style.paddingBottom) || 0),
+  );
+}
 for (const key of ["localHeight", "remoteHeight"]) {
   if (!Number.isFinite(layout[key]))
-    layout[key] = Math.max(390, Math.round(window.innerHeight * 0.68));
+    layout[key] = availablePaneHeight();
   layout[key] = Math.max(260, Math.min(2400, layout[key]));
 }
 delete layout.queueHeight;
@@ -2199,15 +2213,25 @@ layout.localHeight = layout.remoteHeight = Math.max(
   layout.localHeight,
   layout.remoteHeight,
 );
+// Store only additional height so the default continues to fit a resized window.
+layout.paneExtraHeight = Number.isFinite(layout.paneExtraHeight)
+  ? Math.max(0, Math.min(2400, layout.paneExtraHeight))
+  : Math.max(0, layout.localHeight - availablePaneHeight());
 function setLayoutValue(key, value) {
   layout[key] = value;
-  if (key === "localHeight" || key === "remoteHeight")
-    layout.localHeight = layout.remoteHeight = value;
+  if (key === "localHeight" || key === "remoteHeight") {
+    layout.paneExtraHeight = Math.max(0, value - availablePaneHeight());
+    layout.localHeight = layout.remoteHeight =
+      availablePaneHeight() + layout.paneExtraHeight;
+  }
 }
 function saveLayout() {
   localStorage.setItem("termiusplus.layout", JSON.stringify(layout));
 }
 function applyLayout() {
+  if ($("fileWorkspace").hidden) return;
+  layout.localHeight = layout.remoteHeight =
+    availablePaneHeight() + layout.paneExtraHeight;
   for (const side of sides)
     $(side + "Pane").style.height = layout[side + "Height"] + "px";
   const width = paneGrid.clientWidth - 10;
@@ -2297,9 +2321,7 @@ function bindResizer(id, key, axis, min, max) {
   handle.ondblclick = () => {
     setLayoutValue(
       key,
-      axis === "x"
-        ? 0.5
-        : Math.max(390, Math.round(window.innerHeight * 0.68)),
+      axis === "x" ? 0.5 : availablePaneHeight(),
     );
     applyLayout();
     saveLayout();
@@ -2309,6 +2331,7 @@ bindResizer("columnResizer", "leftRatio", "x", 0.18, 0.82);
 bindResizer("localResizer", "localHeight", "y", 260, 2400);
 bindResizer("remoteResizer", "remoteHeight", "y", 260, 2400);
 new ResizeObserver(applyLayout).observe(paneGrid);
+window.addEventListener("resize", applyLayout);
 applyLayout();
 if (window.frameElement?.dataset.view === "queue") showQueue();
 renderRoutes();
